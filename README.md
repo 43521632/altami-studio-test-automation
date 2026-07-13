@@ -1,0 +1,1 @@
+# altami-studio-test-automation
