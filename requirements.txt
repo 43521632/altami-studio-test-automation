@@ -1,7 +1,14 @@
+# Основные зависимости для QEMU QMP и веб-сервера
 qemu.qmp>=0.0.6
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 aiohttp>=3.10.0
+
+# Для работы с процессами
+psutil>=5.9.0
+
+# Для подключения к MacBook
+paramiko>=3.4.0
 
 # Утилиты
 python-dotenv>=1.0.0
