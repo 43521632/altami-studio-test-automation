@@ -15,3 +15,10 @@ source venv/bin/activate
 pip install --upgrade pip
 
 pip install -r requirements.txt
+
+2. Горячие клавиши для continue
+Действие	Команда
+Autocomplete	Печатайте → Tab для принятия
+Edit (редактировать выделенное)	Cmd/Ctrl + I
+Chat (спросить AI)	Cmd/Ctrl + L
+Agent (AI сам правит код)	Переключить внизу слева: Chat → Agent
