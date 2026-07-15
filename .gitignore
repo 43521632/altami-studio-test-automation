@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+/home/romand/git/altami-studio-test-automation/temp
+temp
