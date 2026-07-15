@@ -6,28 +6,37 @@ import signal
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import yaml
-import psutil  # Добавьте в requirements.txt
+import psutil
 
 from .qmp_client import QMPClientWrapper
+from config.settings import VMS_CONFIG_PATH
 
 logger = logging.getLogger(__name__)
 
 class VMManager:
     """Управление существующими виртуальными машинами"""
     
-    def __init__(self, config_path: str = "config/vms_config.yaml"):
-        self.config = self._load_config(config_path)
+    def __init__(self, config_path: str = str(VMS_CONFIG_PATH)):
+        self.config_path = Path(config_path)
+        self.config = self._load_config()
         self.vms: Dict[str, QMPClientWrapper] = {}
         self.vm_pids: Dict[str, int] = {}
     
-    def _load_config(self, config_path: str) -> Dict:
+    def _load_config(self) -> Dict:
         """Загрузка конфигурации ВМ"""
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+        try:
+            with open(self.config_path, 'r') as f:
+                return yaml.safe_load(f)
+        except FileNotFoundError:
+            logger.error(f"❌ Файл конфигурации не найден: {self.config_path}")
+            return {'vms': {}}
+        except yaml.YAMLError as e:
+            logger.error(f"❌ Ошибка парсинга YAML: {e}")
+            return {'vms': {}}
     
     def get_vm_config(self, vm_id: str) -> Dict:
         """Получение конфигурации конкретной ВМ"""
-        return self.config['vms'].get(vm_id, {})
+        return self.config.get('vms', {}).get(vm_id, {})
     
     def check_vm_running(self, vm_id: str) -> bool:
         """Проверка, запущена ли ВМ"""
@@ -49,13 +58,13 @@ class VMManager:
                 if psutil.pid_exists(pid):
                     self.vm_pids[vm_id] = pid
                     return True
-            except (ValueError, IOError):
+            except (ValueError, IOError) as e:
+                logger.debug(f"Ошибка чтения PID файла {pid_file}: {e}")
                 pass
         
         # Способ 3: Поиск процесса QEMU по имени и MAC адресу
         mac = config.get('mac_address')
         if mac:
-            # Ищем процесс QEMU с этим MAC адресом
             for proc in psutil.process_iter(['pid', 'cmdline']):
                 try:
                     cmdline = ' '.join(proc.info['cmdline'] or [])
