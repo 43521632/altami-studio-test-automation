@@ -1,0 +1,43 @@
+# Конфигурация виртуальных машин
+vms:
+  windows11:
+    name: "Windows 11"
+    description: "Windows 11 виртуальная машина"
+    qmp_socket: "/tmp/qmp-windows11.sock"
+    vm_pid_file: "/tmp/qemu-windows11.pid"
+    mac_address: "52:54:00:12:34:56"
+    enabled_tests:
+      - system_info
+      - windows_services
+      - windows_network
+    os_type: "windows"
+    qga_enabled: true
+    timeout: 60
+    
+  astra:
+    name: "Astra Linux"
+    description: "Astra Linux виртуальная машина"
+    qmp_socket: "/tmp/qmp-astra.sock"
+    vm_pid_file: "/tmp/qemu-astra.pid"
+    mac_address: "52:54:00:ab:cd:ef"
+    enabled_tests:
+      - system_info
+      - astra_security
+      - astra_network
+    os_type: "linux"
+    qga_enabled: true
+    timeout: 45
+    
+  macos:
+    name: "macOS"
+    description: "macOS виртуальная машина"
+    qmp_socket: "/tmp/qmp-macos.sock"
+    vm_pid_file: "/tmp/qemu-macos.pid"
+    mac_address: "52:54:00:fe:dc:ba"
+    enabled_tests:
+      - system_info
+      - macos_system
+      - macos_network
+    os_type: "macos"
+    qga_enabled: false
+    timeout: 90
