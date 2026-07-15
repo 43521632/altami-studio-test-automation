@@ -4,7 +4,7 @@
 
 # Создаем виртуальное окружение
 
-python3.14 -m venv venv
+python3.12 -m venv venv
 
 # Активируем его
 
