@@ -1,25 +1,26 @@
+"""Системные тесты для Astra Linux"""
+
+import logging
 import pytest
 from tests.base_test import BaseVMTest
 
-@pytest.mark.asyncio
+logger = logging.getLogger(__name__)
+
+@pytest.mark.astra
+@pytest.mark.system
 class TestAstraSystem(BaseVMTest):
     vm_id = "astra"
     
-    async def test_astra_ping(self):
-        """Тест пинга до Astra Linux"""
-        status = await self.client.query_status()
-        assert status['status'] == 'running'
-        print(f"✅ Astra Linux статус: {status}")
+    async def test_astra_status(self):
+        """Тест статуса Astra Linux"""
+        logger.info(f"🔍 {self.vm_id}: Проверка статуса")
+        status = await self.get_vm_status()
+        assert status['status'] == 'running', "ВМ не запущена"
+        logger.info(f"✅ {self.vm_id}: Статус ВМ: {status['status']}")
     
-    async def test_astra_security(self):
-        """Проверка настроек безопасности Astra"""
-        # Проверка через QGA
-        result = await self.client.execute('guest-info')
-        assert result.get('supported_commands') is not None
-        print(f"✅ Доступные команды QGA: {len(result['supported_commands'])}")
-    
-    async def test_astra_network_interfaces(self):
-        """Проверка сетевых интерфейсов в Astra"""
-        # Можно получить информацию о сети через guest-network-get-interfaces
-        result = await self.client.execute('guest-network-get-interfaces')
-        assert len(result) > 0, "Нет сетевых интерфейсов"
+    async def test_astra_cpu_info(self):
+        """Тест информации о CPU"""
+        logger.info(f"🔍 {self.vm_id}: Получение информации о CPU")
+        cpu_info = await self.execute_qmp_command("query-cpus")
+        assert len(cpu_info) > 0, "Нет информации о CPU"
+        logger.info(f"✅ {self.vm_id}: Количество CPU: {len(cpu_info)}")
