@@ -74,7 +74,7 @@ newgrp libvirt      # или перелогиньтесь
 
 # Проверка
 systemctl status libvirtd
-virsh -c qemu:///system list --all
+virsh -c qemu:///system list --all - показывает список виртуальных машин в системе.
 ```
 
 Если `virsh list` требует sudo — вы не в группе `libvirt`. Перелогиньтесь.
