@@ -30,9 +30,10 @@ vms:
     # Путь к тестам для этой ОС
     test_path: "./tests/windows"
 
-    # Ожидаемые ресурсы (для проверки перед запуском; ВМ НЕ пересоздаётся)
-    memory: 4096             # МБ
-    cpu_cores: 2
+    # Ожидаемые ресурсы (для проверки перед запуском; ВМ НЕ пересоздаётся).
+    # Значения сверены с фактическим доменом: virsh dominfo win_11_auto-test
+    memory: 8000             # МБ
+    cpu_cores: 6
 
     # Таймауты жизненного цикла ВМ, сек
     boot_timeout: 180        # Сколько ждать загрузки ОС после старта
@@ -40,28 +41,37 @@ vms:
 
     # Базовые настройки для UI-тестов
     ui_settings:
-      resolution: "1920x1080"
+      # Фактический видеорежим гостя, снят через detect_resolution().
+      # Если нужен 1920x1080 — менять надо в самой гостевой ОС, а не здесь.
+      resolution: "1920x1200"
       scale_factor: 1.0
 
   astra:
-    vm_name: "astra-linux-test"
-    description: "Astra Linux — UI тесты"
+    vm_name: "Astra_1_8_auto-test"
+    description: "Astra Linux 1.8 — UI тесты"
     enabled: true
     os_type: "linux"
-    qmp_socket: "/var/lib/libvirt/qemu/astra-linux-test.qmp"
+    qmp_socket: "/var/lib/libvirt/qemu/Astra_1_8_auto-test.qmp"
     test_path: "./tests/Astra"
-    memory: 4096
-    cpu_cores: 2
+    # Сверено с доменом: virsh dominfo Astra_1_8_auto-test
+    memory: 8000
+    cpu_cores: 4
     boot_timeout: 120
     shutdown_timeout: 90
     ui_settings:
-      resolution: "1920x1080"
+      # Фактический видеорежим гостя, снят через detect_resolution().
+      # Если нужен 1920x1080 — менять надо в самой гостевой ОС, а не здесь:
+      # эталоны снимаются в том режиме, в котором реально работает гость.
+      resolution: "1280x800"
       scale_factor: 1.0
 
   macos:
     vm_name: "macos-test"
     description: "macOS — UI тесты"
-    enabled: true
+    # Домена macos-test в libvirt нет — секция отключена, чтобы проверки
+    # готовности и run_tests.py не считали его отсутствие ошибкой.
+    # Включить обратно, когда ВМ будет создана в virt-manager.
+    enabled: false
     os_type: "macos"
     qmp_socket: "/var/lib/libvirt/qemu/macos-test.qmp"
     test_path: "./tests/macos"
@@ -94,7 +104,10 @@ test_settings:
 # =============================================================================
 logging:
   log_dir: "./logs"
-  screenshot_dir: "./screenshots"
+  # ВНЕ репозитория намеренно: screendump выполняет процесс QEMU от имени
+  # libvirt-qemu, а тот не может пройти внутрь /home/romand (права 750).
+  # Каталог принадлежит libvirt-qemu:kvm с g+w — QEMU пишет, мы читаем по kvm.
+  screenshot_dir: "/var/lib/libvirt/screenshots"
   baseline_dir: "./baseline"     # Эталонные скриншоты
   diff_dir: "./screenshots/diff"
   report_dir: "./reports"

@@ -13,8 +13,13 @@ Nothing is installed inside the guest: UI automation is fully black-box.
 
 import asyncio
 import logging
+import os
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from config.settings import SCREENSHOT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +31,49 @@ _QMP_HINT = (
     "Не установлена библиотека qemu.qmp. Установите:\n"
     "  pip install qemu.qmp>=0.0.6"
 )
+
+
+def _ensure_qemu_writable(directory: Path) -> None:
+    """Create `directory` so the QEMU process can write screenshots into it.
+
+    A plain mkdir() gives romand:romand 0755 under the usual umask 022, and
+    QEMU (user `libvirt-qemu`) then fails with «Permission denied» on the
+    per-VM subdirectory. We hand the directory the same group as SCREENSHOT_DIR
+    (kvm, prepared per README) and add group write.
+
+    Best-effort: on a directory we do not own — e.g. SCREENSHOT_DIR itself,
+    owned by libvirt-qemu — chown/chmod raise PermissionError, which is fine
+    precisely because such a directory is already set up correctly.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        gid = Path(SCREENSHOT_DIR).stat().st_gid
+        if directory.stat().st_gid != gid:
+            os.chown(directory, -1, gid)
+        directory.chmod(0o775)
+    except (PermissionError, OSError) as e:
+        logger.debug("Не удалось расширить права на %s: %s", directory, e)
+
+
+@contextmanager
+def probe_path(suffix: str = ".ppm"):
+    """Yield a throwaway screendump path QEMU is actually allowed to write to.
+
+    NOT tempfile.TemporaryDirectory(): screendump is performed by the QEMU
+    process (user `libvirt-qemu`), which cannot write into /tmp under the
+    stock AppArmor profile, nor into a 0700 temp dir owned by us. SCREENSHOT_DIR
+    is the one location prepared for it — see README, «Права на каталог
+    скриншотов». Failures here surface as «QEMU не создал файл скриншота».
+    """
+    path = Path(SCREENSHOT_DIR) / f".probe_{os.getpid()}_{uuid.uuid4().hex}{suffix}"
+    try:
+        yield path
+    finally:
+        # Файл создаёт QEMU, владелец — libvirt-qemu; удаление опирается на
+        # право записи в каталог (мы в группе kvm), а не на владение файлом.
+        path.unlink(missing_ok=True)
+        path.with_suffix(".ppm").unlink(missing_ok=True)
 
 
 class QMPError(RuntimeError):
@@ -229,7 +277,7 @@ class QMPSession:
         `output_path` is not .ppm it is converted with Pillow.
         """
         output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_qemu_writable(output_path.parent)
 
         # QEMU пишет PPM; если нужен другой формат — снимаем во временный PPM.
         wants_conversion = output_path.suffix.lower() != ".ppm"
@@ -269,12 +317,9 @@ class QMPSession:
 
         The result is cached on the session for coordinate conversion.
         """
-        import tempfile
-
         from PIL import Image
 
-        with tempfile.TemporaryDirectory() as tmp:
-            shot = Path(tmp) / "probe.ppm"
+        with probe_path() as shot:
             await self.screendump(shot)
             with Image.open(shot) as img:
                 self.resolution = img.size

@@ -66,7 +66,18 @@ def main() -> int:
         return 2
 
     console.print("\n[bold]3. ВМ из конфигурации[/bold]")
-    vm_ids = [args.vm] if args.vm else manager.all_vm_ids()
+    # Только enabled: выключенная в конфиге ВМ — это намеренный выбор, а не
+    # проблема готовности. Иначе она и роняет общий вердикт, и добавляет свою
+    # память в требуемую по хосту.
+    if args.vm:
+        vm_ids = [args.vm]
+    else:
+        vm_ids = manager.enabled_vm_ids()
+        skipped = [v for v in manager.all_vm_ids() if v not in vm_ids]
+        if skipped:
+            console.print(
+                f"   [dim]Пропущены (enabled: false): {', '.join(skipped)}[/dim]"
+            )
 
     table = Table(header_style="bold cyan")
     table.add_column("ВМ")

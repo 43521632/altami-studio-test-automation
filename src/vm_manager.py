@@ -6,6 +6,7 @@ This module joins them into a single object a test can hold: :class:`VMSession`.
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -99,21 +100,27 @@ class VMSession:
         # Импорт здесь: сравнение нужно не всем сценариям, а зависимости тяжёлые
         from src.screenshot_compare import ScreenshotComparator, ScreenshotCompareError
 
-        import tempfile
-
         comparator = ScreenshotComparator(threshold=stable_threshold)
         deadline = asyncio.get_event_loop().time() + timeout
         stable_count = 0
 
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_dir = Path(tmp)
+        # Пробные кадры пишет процесс QEMU, а не мы, поэтому НЕ tempfile:
+        # /tmp ему запрещён AppArmor'ом. Единственный подготовленный для него
+        # каталог — SCREENSHOT_DIR. Раньше пробы молча падали весь таймаут,
+        # и «загрузка» определялась только по истечении времени.
+        probe_dir = Path(SCREENSHOT_DIR)
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        created: List[Path] = []
+
+        try:
             previous: Optional[Path] = None
             index = 0
 
             while asyncio.get_event_loop().time() < deadline:
                 await asyncio.sleep(poll_interval)
                 index += 1
-                current = tmp_dir / f"probe_{index}.png"
+                current = probe_dir / f".boot_{self.vm_id}_{os.getpid()}_{index}.png"
+                created.append(current)
                 try:
                     await self.qmp.screendump(current)
                 except QMPError as e:
@@ -141,6 +148,12 @@ class VMSession:
                         # Экран ещё меняется — счётчик стабильности сбрасываем
                         stable_count = 0
                 previous = current
+        finally:
+            # Файлы создаёт QEMU (владелец libvirt-qemu) — удаление опирается
+            # на право записи в каталог, полученное через группу kvm.
+            for probe in created:
+                probe.unlink(missing_ok=True)
+                probe.with_suffix(".ppm").unlink(missing_ok=True)
 
         logger.warning("%s: экран не стабилизировался за %.0fс", self.vm_id, timeout)
         return False

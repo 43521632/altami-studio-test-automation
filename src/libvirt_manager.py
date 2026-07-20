@@ -14,6 +14,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import psutil
+
 from config.settings import (
     LIBVIRT_CONNECT_RETRIES,
     LIBVIRT_RETRY_BACKOFF,
@@ -504,7 +506,11 @@ class LibvirtManager:
                 "cpu_mhz": info[3],
                 "hostname": conn.getHostname(),
                 "libvirt_version": conn.getLibVersion(),
-                "free_memory_mb": conn.getFreeMemory() // (1024 * 1024),
+                # ВАЖНО: не conn.getFreeMemory() — она не учитывает страничный
+                # кэш, который ядро отдаёт по первому требованию. На хосте с
+                # прогретым кэшем она показывает ~1 ГБ при 47 ГБ реально
+                # доступных и даёт ложную тревогу о нехватке памяти.
+                "free_memory_mb": psutil.virtual_memory().available // (1024 * 1024),
             }
         except Exception as e:
             raise LibvirtManagerError(f"Не удалось получить информацию о хосте: {e}") from e
