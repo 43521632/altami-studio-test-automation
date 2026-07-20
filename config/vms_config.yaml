@@ -17,15 +17,15 @@ libvirt:
 vms:
   windows:
     # Имя ВМ в virt-manager (как отображается в списке доменов)
-    vm_name: "windows-10-test"
-    description: "Windows 10 — UI тесты"
+    vm_name: "win_11_auto-test"
+    description: "Windows 11 — UI тесты"
     enabled: true
     os_type: "windows"
 
     # ВТОРОЙ QMP-сокет для управления UI (клавиатура/мышь/скриншоты).
     # Это НЕ монитор libvirt — libvirt держит свой монопольно.
     # Добавляется в XML домена через <qemu:commandline>, см. README.
-    qmp_socket: "/var/lib/libvirt/qemu/windows-10-test.qmp"
+    qmp_socket: "/var/lib/libvirt/qemu/win_11_auto-test.qmp"
 
     # Путь к тестам для этой ОС
     test_path: "./tests/windows"
