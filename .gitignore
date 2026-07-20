@@ -219,3 +219,13 @@ __marimo__/
 
 /home/romand/git/altami-studio-test-automation/temp
 temp
+
+# Артефакты прогонов тестов
+logs/
+screenshots/
+reports/
+.test_state.json
+
+# ВНИМАНИЕ: baseline/ намеренно НЕ игнорируется — эталонные скриншоты
+# это тестовые фикстуры, они должны быть в git, чтобы вся команда
+# сравнивала с одними и теми же эталонами.

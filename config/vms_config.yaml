@@ -1,43 +1,122 @@
-# Конфигурация виртуальных машин
+# =============================================================================
+# Конфигурация виртуальных машин для virt-manager / libvirt
+# =============================================================================
+# ВАЖНО: поле `vm_name` должно ТОЧНО совпадать с именем домена в virt-manager.
+# Проверить список доступных имён:  virsh -c qemu:///system list --all
+# =============================================================================
+
+# URI подключения к libvirt.
+# qemu:///system  — системный экземпляр (ВМ видны всем, нужен доступ к группе libvirt)
+# qemu:///session — пользовательский экземпляр (ВМ только текущего пользователя)
+libvirt:
+  uri: "qemu:///system"
+  connect_timeout: 10      # Таймаут подключения к libvirt, сек
+  connect_retries: 3       # Попыток переподключения при обрыве
+  retry_backoff: 2.0       # Множитель экспоненциальной задержки между попытками
+
 vms:
-  windows11:
-    name: "Windows 11"
-    description: "Windows 11 виртуальная машина"
-    qmp_socket: "/tmp/qmp-windows11.sock"
-    vm_pid_file: "/tmp/qemu-windows11.pid"
-    mac_address: "52:54:00:12:34:56"
-    enabled_tests:
-      - system_info
-      - windows_services
-      - windows_network
+  windows:
+    # Имя ВМ в virt-manager (как отображается в списке доменов)
+    vm_name: "windows-10-test"
+    description: "Windows 10 — UI тесты"
+    enabled: true
     os_type: "windows"
-    qga_enabled: true
-    timeout: 60
-    
+
+    # ВТОРОЙ QMP-сокет для управления UI (клавиатура/мышь/скриншоты).
+    # Это НЕ монитор libvirt — libvirt держит свой монопольно.
+    # Добавляется в XML домена через <qemu:commandline>, см. README.
+    qmp_socket: "/var/lib/libvirt/qemu/windows-10-test.qmp"
+
+    # Путь к тестам для этой ОС
+    test_path: "./tests/windows"
+
+    # Ожидаемые ресурсы (для проверки перед запуском; ВМ НЕ пересоздаётся)
+    memory: 4096             # МБ
+    cpu_cores: 2
+
+    # Таймауты жизненного цикла ВМ, сек
+    boot_timeout: 180        # Сколько ждать загрузки ОС после старта
+    shutdown_timeout: 120    # Сколько ждать graceful shutdown до destroy
+
+    # Базовые настройки для UI-тестов
+    ui_settings:
+      resolution: "1920x1080"
+      scale_factor: 1.0
+
   astra:
-    name: "Astra Linux"
-    description: "Astra Linux виртуальная машина"
-    qmp_socket: "/tmp/qmp-astra.sock"
-    vm_pid_file: "/tmp/qemu-astra.pid"
-    mac_address: "52:54:00:ab:cd:ef"
-    enabled_tests:
-      - system_info
-      - astra_security
-      - astra_network
+    vm_name: "astra-linux-test"
+    description: "Astra Linux — UI тесты"
+    enabled: true
     os_type: "linux"
-    qga_enabled: true
-    timeout: 45
-    
+    qmp_socket: "/var/lib/libvirt/qemu/astra-linux-test.qmp"
+    test_path: "./tests/Astra"
+    memory: 4096
+    cpu_cores: 2
+    boot_timeout: 120
+    shutdown_timeout: 90
+    ui_settings:
+      resolution: "1920x1080"
+      scale_factor: 1.0
+
   macos:
-    name: "macOS"
-    description: "macOS виртуальная машина"
-    qmp_socket: "/tmp/qmp-macos.sock"
-    vm_pid_file: "/tmp/qemu-macos.pid"
-    mac_address: "52:54:00:fe:dc:ba"
-    enabled_tests:
-      - system_info
-      - macos_system
-      - macos_network
+    vm_name: "macos-test"
+    description: "macOS — UI тесты"
+    enabled: true
     os_type: "macos"
-    qga_enabled: false
-    timeout: 90
+    qmp_socket: "/var/lib/libvirt/qemu/macos-test.qmp"
+    test_path: "./tests/macos"
+    memory: 8192
+    cpu_cores: 4
+    boot_timeout: 300        # macOS грузится дольше
+    shutdown_timeout: 180
+    ui_settings:
+      resolution: "2560x1440"
+      scale_factor: 1.0
+
+# =============================================================================
+# Настройки тестирования
+# =============================================================================
+test_settings:
+  timeout: 300               # Таймаут на один тест, сек
+  retry_count: 3             # Попыток перезапуска упавшего теста
+  parallel_workers: 2        # Максимум одновременно работающих ВМ
+
+  screenshot_comparison:
+    method: "ssim"           # Structural Similarity Index
+    threshold: 0.99          # Порог прохождения: SSIM > 0.99
+    save_diff: true          # Сохранять diff-изображение при несовпадении
+    # Если размеры скриншота и эталона различаются — привести к размеру эталона.
+    # false = считать тест упавшим при несовпадении размеров.
+    resize_on_mismatch: false
+
+# =============================================================================
+# Логирование и артефакты
+# =============================================================================
+logging:
+  log_dir: "./logs"
+  screenshot_dir: "./screenshots"
+  baseline_dir: "./baseline"     # Эталонные скриншоты
+  diff_dir: "./screenshots/diff"
+  report_dir: "./reports"
+  log_level: "INFO"
+  rotation_max_bytes: 10485760   # 10 МБ на файл лога
+  rotation_backup_count: 5
+
+# =============================================================================
+# Kiwi TCMS (ЗАГЛУШКА — доступ появится позже)
+# =============================================================================
+# Пока enabled: false, результаты пишутся только локально в JSON/CSV,
+# чтобы потом их можно было импортировать в Kiwi.
+kiwi:
+  enabled: false
+  # TODO: заполнить, когда появится доступ к реальному Kiwi TCMS
+  # url: "https://kiwi.company.com"
+  # api_key: "your-api-key"        # лучше через переменную окружения KIWI_API_KEY
+  # project_id: 1
+  # test_run_name: "Automated UI Tests"
+
+  # Локальный экспорт результатов (работает всегда, даже без Kiwi)
+  local_export:
+    enabled: true
+    json_path: "./reports/kiwi_export.json"
+    csv_path: "./reports/kiwi_export.csv"

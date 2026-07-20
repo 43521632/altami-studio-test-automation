@@ -1,56 +1,89 @@
-"""Базовый класс для тестов ВМ"""
+"""Base class for VM tests.
+
+Provides QMP shortcuts and screenshot assertions on top of the `vm_session`
+fixture. Subclasses declare which VM they target via `vm_id`; tests are
+skipped automatically when running against a different VM.
+
+Example:
+    @pytest.mark.windows
+    class TestLogin(BaseVMTest):
+        vm_id = "windows"
+
+        async def test_login_screen(self):
+            await self.click(960, 540)
+            await self.assert_screen("login_screen")
+"""
 
 import logging
-import pytest
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-from src.vm_manager import VMManager
-from src.qmp_client import QMPClientWrapper
+import pytest
+
+from src.screenshot_compare import ComparisonResult
+from src.vm_manager import VMSession
 
 logger = logging.getLogger(__name__)
 
+
 class BaseVMTest:
-    """Базовый класс для тестов ВМ"""
-    
+    """Base class wiring the `vm_session` and `screenshot` fixtures in."""
+
+    #: VM id from vms_config.yaml this test class targets
     vm_id: Optional[str] = None
-    vm_config: Optional[Dict] = None
-    client: Optional[QMPClientWrapper] = None
-    
+
     @pytest.fixture(autouse=True)
-    async def setup_vm(self, vm_manager: VMManager):
-        """Фикстура для настройки ВМ перед тестом"""
-        if not self.vm_id:
-            pytest.skip("vm_id не указан")
-        
-        self.vm_config = vm_manager.get_vm_config(self.vm_id)
-        if not self.vm_config:
-            pytest.skip(f"Конфигурация для {self.vm_id} не найдена")
-        
-        # Проверка, что ВМ запущена
-        if not vm_manager.check_vm_running(self.vm_id):
-            pytest.skip(f"ВМ {self.vm_id} не запущена")
-        
-        # Подключение к ВМ
-        try:
-            self.client = await vm_manager.connect_to_vm(self.vm_id)
-            status = await self.client.query_status()
-            if status.get('status') != 'running':
-                pytest.skip(f"ВМ {self.vm_id} не запущена (статус: {status.get('status')})")
-        except Exception as e:
-            pytest.skip(f"Не удалось подключиться к {self.vm_id}: {e}")
-        
-        logger.info(f"✅ {self.vm_id}: Тест готов к выполнению")
+    def _bind_fixtures(self, request, vm_session: VMSession, screenshot, vm_id: str):
+        """Attach the session to the instance and skip mismatched VMs."""
+        if self.vm_id and self.vm_id != vm_id:
+            pytest.skip(
+                f"Тест предназначен для ВМ '{self.vm_id}', "
+                f"а прогон идёт на '{vm_id}'"
+            )
+        self.session = vm_session
+        self.qmp = vm_session.qmp
+        self.screenshot = screenshot
+        self.config: Dict[str, Any] = vm_session.config
         yield
-        # Очистка после теста
-        logger.info(f"🧹 {self.vm_id}: Очистка после теста")
-        await vm_manager.disconnect_from_vm(self.vm_id)
-    
-    async def execute_qmp_command(self, command: str, **kwargs) -> Dict:
-        """Выполнение команды QMP"""
-        if not self.client:
-            raise Exception("Клиент не инициализирован")
-        return await self.client.execute(command, kwargs if kwargs else None)
-    
+        # Скриншот при падении — диагностика, ради которой стоит потерпеть I/O
+        report = getattr(request.node, "rep_call", None)
+        if report is not None and report.failed:
+            logger.error("Тест '%s' упал", request.node.name)
+
+    # --- Ввод ---------------------------------------------------------------
+
+    async def click(self, x: int, y: int, button: str = "left") -> None:
+        """Click at absolute guest pixel coordinates."""
+        await self.qmp.mouse_click(x, y, button)
+
+    async def double_click(self, x: int, y: int) -> None:
+        """Double-click at absolute guest pixel coordinates."""
+        await self.qmp.mouse_double_click(x, y)
+
+    async def type_text(self, text: str) -> None:
+        """Type an ASCII string into the guest."""
+        await self.qmp.type_text(text)
+
+    async def press(self, *keys: str) -> None:
+        """Press a key combination, e.g. `await self.press("ctrl", "c")`."""
+        await self.qmp.send_keys(list(keys))
+
+    # --- Скриншоты ----------------------------------------------------------
+
+    async def capture(self, name: str) -> Path:
+        """Take a screenshot without comparing it to a baseline."""
+        return await self.session.screenshot(name)
+
+    async def assert_screen(self, name: str) -> ComparisonResult:
+        """Capture and assert the screen matches its baseline (SSIM)."""
+        return await self.screenshot.assert_matches(name)
+
+    # --- Состояние ВМ -------------------------------------------------------
+
+    async def qmp_execute(self, command: str, **kwargs) -> Any:
+        """Execute a raw QMP command against the guest's QEMU process."""
+        return await self.qmp.execute(command, kwargs or None)
+
     async def get_vm_status(self) -> Dict:
-        """Получение статуса ВМ"""
-        return await self.execute_qmp_command("query-status")
+        """Return the QEMU run state (`{"status": "running", ...}`)."""
+        return await self.qmp.query_status()
