@@ -63,69 +63,112 @@ await self.session.wait_until_screen_stable(timeout=60)
 
 ## 3. Логин в гостевую ОС
 
-Автологина в этих ВМ нет — после загрузки обе стоят на экране блокировки.
-Логин делается той же инжекцией ввода, что и всё остальное.
+**Писать вход в тестах не нужно — он выполняется сам.** Фикстура
+`guest_login` (autouse, уровень сессии, `tests/conftest.py`) входит в систему
+один раз на прогон, до первого теста. Тест получает уже готовый рабочий стол.
 
-> Код в этом разделе и в примерах 7–8 — **шаблон, а не проверенный сценарий**.
-> Инжекция ввода, скриншоты и сравнение проверены на живых ВМ; сам вход —
-> нет, поскольку паролей у автора не было. Пароли и координаты подставьте
-> свои и прогоните первый раз с `--log-cli-level=DEBUG`, глядя на скриншоты.
+Это не тест: вход ничего не проверяет, он лишь готовит окружение.
+
+### Где задаётся
+
+Всё — в `config/vms_config.yaml`, в блоке `login:` нужной ВМ. Кода трогать не
+надо, потому что вход — это чистая последовательность кликов и набора, и у
+каждой ОС она своя:
+
+```yaml
+    login:
+      enabled: true
+      username: "test"
+      # пароля здесь нет — он в .env, см. ниже
+      boot_delay: 40           # ждать от старта ВМ до экрана входа
+      steps:
+        - {click: [640, 372], wait: 0.5}   # поле «Имя пользователя»
+        - {type: "$username"}
+        - {click: [615, 427], wait: 0.5}   # поле «Введите пароль»
+        - {type: "$password"}
+        - {click: [779, 427], wait: 2}     # синяя кнопка «>»
+```
+
+Шаг — это одно действие плюс необязательная пауза `wait` (секунды):
+
+| Ключ | Действие |
+|---|---|
+| `click: [x, y]` | клик по координатам гостя |
+| `type: "текст"` | набор строки; `$username` и `$password` подставляются |
+| `key: ret` или `key: [ctrl, a]` | клавиша или комбинация |
+
+### Пароли — только в .env
+
+`config/vms_config.yaml` под git, поэтому паролей в нём нет. Они живут в
+`.env`, который в `.gitignore`:
+
+```bash
+cp .env.example .env      # и заполнить
+```
+
+```ini
+WINDOWS_LOGIN_PASSWORD=...
+ASTRA_LOGIN_PASSWORD=...
+```
+
+Имя переменной — `<VM_ID>_LOGIN_PASSWORD`, где `VM_ID` — ключ ВМ из
+`vms_config.yaml`. Добавили ВМ с ключом `debian` — заведите
+`DEBIAN_LOGIN_PASSWORD`. Имя пользователя перекрывается так же:
+`<VM_ID>_LOGIN_USER`.
+
+Без переменной прогон падает сразу, до кликов, и в сообщении сказано, какую
+переменную заполнить. В логи пароль не попадает — только его длина.
+
+### Что уже настроено
+
+**Windows.** Esc убирает заставку блокировки, клик в поле пароля, набор,
+Enter. Учётная запись одна (`Test1`) и выбрана заранее, логин не набирается.
+
+**Astra Linux.** Гритер fly-dm: имя пользователя, пароль, кнопка «>». Дальше
+специфика максимального уровня защищённости — диалог «Выбор атрибутов
+безопасности», где уровень целостности переключается на «Низкий», кнопка
+«Войти», и предупреждение «Ваш домашний каталог не даёт записать пробный
+файл» с кнопкой «Да».
+
+> **Координаты гритера и рабочего стола — разные режимы.** Гритер fly-dm
+> показывается в 1280x800, а после входа гость переключается в 1920x1200.
+> Координаты в `login.steps` для Astra заданы для 1280x800, а координаты в
+> тестах — для 1920x1200.
 
 > **Кириллица не поддерживается.** Раскладка qcode в QMP американская,
 > `type_text()` умеет только ASCII. Пароль с кириллицей ввести не получится —
 > смените его на латиницу или заводите логин через буфер обмена гостя.
 
-### Windows
+### Как это защищено от повторного входа
 
-Экран блокировки сначала нужно убрать, и только потом появится поле пароля:
+ВМ между прогонами не выключается, поэтому гость может быть уже залогинен —
+и вслепую кликать по рабочему столу нельзя. После первого удачного входа
+экран входа сохраняется эталоном `baseline/<vm_id>/login_screen.png`. Дальше
+на каждом прогоне текущий экран сверяется с ним:
 
-```python
-async def _login(self):
-    await self.press("esc")            # убрать экран блокировки
-    await asyncio.sleep(1)
-    await self.type_text("ваш-пароль")
-    await self.press("ret")            # Enter
-    # Рабочий стол прорисовывается не мгновенно
-    await self.session.wait_until_screen_stable(timeout=60)
-```
+* совпал (SSIM > 0.90) — выполняем шаги входа;
+* не совпал — считаем, что вход уже выполнен, и шаги пропускаем.
 
-Если учётных записей несколько, перед вводом пароля кликните нужную:
-`await self.click(x, y)`.
+После шагов проверяется, что экран действительно сменился (доля изменившихся
+пикселей ≥ `min_change_ratio`); иначе прогон падает с понятной ошибкой и
+скриншотом `login_failed_*`. Здесь именно доля пикселей, а не SSIM: у гритера
+и рабочего стола Astra общие обои, и SSIM у неудачного входа тот же, что у
+удачного (0.933).
 
-### Astra Linux
+### Если вход сломался
 
-Экран блокировки с часами убирается клавишей или кликом, дальше — поле пароля
-в fly-dm. Логин часто уже подставлен:
+1. Смотрите скриншоты `login_before_*`, `login_after_*`, `login_failed_*` в
+   `/var/lib/libvirt/screenshots/<vm_id>/`.
+2. Прогоняйте с `--log-cli-level=DEBUG` — в лог пишется каждый шаг.
+3. Сместился интерфейс — снимите новые координаты со скриншота и поправьте
+   `login.steps`. Пароль в лог не попадает, только его длина.
+4. Не успела загрузиться ОС — увеличьте `boot_delay`.
+5. Изменился экран входа — удалите `baseline/<vm_id>/login_screen.png`, он
+   пересоздастся на следующем удачном входе.
 
-```python
-async def _login(self):
-    await self.press("esc")
-    await asyncio.sleep(1)
-    await self.type_text("пароль")
-    await self.press("ret")
-    await self.session.wait_until_screen_stable(timeout=60)
-```
-
-Если поле логина пустое, заполните оба поля через `tab`:
-
-```python
-    await self.type_text("user")
-    await self.press("tab")
-    await self.type_text("пароль")
-    await self.press("ret")
-```
-
-### Логин один раз на сессию
-
-Логиниться в каждом тесте не нужно — ВМ живёт всю сессию, вход достаточно
-выполнить один раз. Самый простой способ — отдельный тест `test_00_login`
-первым в классе: pytest выполняет тесты в порядке объявления, а остальные
-тесты рассчитывают на уже выполненный вход.
-
-Минус подхода честный: тесты становятся зависимы от порядка, и запуск
-одного теста через `-k` без логина работать не будет. Если это мешает —
-выносите вход в автофикстуру уровня класса с `loop_scope="session"`
-(обязательно тот же loop scope, иначе прогон зависнет — см. раздел 10).
+> **Набор должен быть медленным.** `login.type_delay` по умолчанию 0.15с.
+> При штатных 0.02с гритер fly-dm на свежезагруженной ВМ теряет символы — из
+> «test» доходило только «t».
 
 ---
 
@@ -262,7 +305,7 @@ screenshots/diff/                      # в репозитории
 ├── <vm_id>_<тест>_<время>_diff.png    # трёхпанельный дифф
 └── <vm_id>_boot_<время>_diff.png      # шум от ожидания загрузки, см. ниже
 
-baseline/<vm_id>/<тест>.png            # эталоны — в git!
+baseline/<vm_id>/<тест>.png            # эталоны — локальные, не в git
 
 reports/                               # в репозитории
 ├── <vm_id>/junit_attempt1.xml
@@ -319,64 +362,7 @@ VM_ID=astra pytest tests/Astra/ -v --log-cli-level=DEBUG
 
 ---
 
-## 7. Полный пример: Windows
-
-`tests/windows/test_windows_notepad.py`
-
-```python
-"""UI-тест Блокнота на Windows."""
-
-import asyncio
-
-import pytest
-
-from tests.base_tests import BaseVMTest
-
-
-@pytest.mark.windows
-@pytest.mark.ui
-class TestWindowsNotepad(BaseVMTest):
-    vm_id = "windows"
-
-    async def test_00_login(self):
-        """Вход в систему. Должен идти первым в файле."""
-        await self.press("esc")
-        await asyncio.sleep(1)
-        await self.type_text("ваш-пароль")
-        await self.press("ret")
-        assert await self.session.wait_until_screen_stable(timeout=60), \
-            "Рабочий стол не появился после входа"
-
-    async def test_notepad_opens(self):
-        """Блокнот открывается через Win+R и выглядит как эталон."""
-        await self.press("meta_l", "r")        # Win+R
-        await asyncio.sleep(1)
-        await self.type_text("notepad")
-        await self.press("ret")
-        await asyncio.sleep(2)
-
-        await self.assert_screen("notepad_empty")
-
-    async def test_notepad_accepts_text(self):
-        """Набранный текст отображается в окне."""
-        await self.type_text("Hello from QMP")
-        await asyncio.sleep(0.5)
-        await self.assert_screen("notepad_with_text")
-
-        # Вернуть состояние: выделить всё и удалить
-        await self.press("ctrl", "a")
-        await self.press("delete")
-```
-
-Запуск:
-
-```bash
-VM_ID=windows pytest tests/windows/test_windows_notepad.py -v
-```
-
----
-
-## 8. Полный пример: Astra Linux
+## 7. Полный пример: Astra Linux
 
 `tests/Astra/test_astra_terminal.py`
 
@@ -395,14 +381,7 @@ from tests.base_tests import BaseVMTest
 class TestAstraTerminal(BaseVMTest):
     vm_id = "astra"
 
-    async def test_00_login(self):
-        """Вход в систему."""
-        await self.press("esc")
-        await asyncio.sleep(1)
-        await self.type_text("пароль-латиницей")
-        await self.press("ret")
-        assert await self.session.wait_until_screen_stable(timeout=60), \
-            "Рабочий стол не появился после входа"
+    # Вход выполнять не нужно: фикстура guest_login сделала это до тестов
 
     async def test_terminal_opens(self):
         """Терминал открывается по Ctrl+Alt+T."""
@@ -429,7 +408,7 @@ VM_ID=astra pytest tests/Astra/test_astra_terminal.py -v
 
 ---
 
-## 9. Чек-лист нового теста
+## 8. Чек-лист нового теста
 
 1. Файл в `tests/windows/` или `tests/Astra/`, имя вида `test_*.py`.
 2. Класс наследует `BaseVMTest`, поле `vm_id` — `"windows"` или `"astra"`.
@@ -443,7 +422,7 @@ VM_ID=astra pytest tests/Astra/test_astra_terminal.py -v
 7. Верните UI в исходное состояние в конце теста — следующий тест получит его
    как есть.
 
-## 10. Частые грабли
+## 9. Частые грабли
 
 | Симптом | Причина |
 |---|---|

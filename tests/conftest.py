@@ -91,6 +91,24 @@ async def vm_session(vm_manager: VMManager, vm_id: str) -> VMSession:
         pytest.skip(f"Не удалось подготовить ВМ '{vm_id}': {e}")
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
+async def guest_login(vm_session: VMSession) -> bool:
+    """Sign into the guest OS once, before any test runs.
+
+    Setup, not a test: UI tests need a desktop, and the VM boots to a lock
+    screen. Skips itself when the desktop is already up (the VM keeps running
+    between runs). Credentials come from the VM's `login:` block.
+    """
+    from src.guest_login import ensure_logged_in
+
+    performed = await ensure_logged_in(vm_session)
+    logger.info(
+        "%s: автологин %s", vm_session.vm_id,
+        "выполнен" if performed else "не потребовался",
+    )
+    return performed
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def screenshot_on_failure(request, vm_session: VMSession):
     """Capture a screenshot automatically when a test fails."""
