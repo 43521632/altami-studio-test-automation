@@ -133,21 +133,36 @@ class BaseVMTest:
         return crop_path
 
     async def compare_region(
-        self, name: str, box: Tuple[int, int, int, int]
+        self,
+        name: str,
+        box: Tuple[int, int, int, int],
+        threshold: Optional[float] = None,
     ) -> ComparisonResult:
         """Crop the screen to `box` and compare it against the baseline (no fail).
 
         A missing baseline is created from the crop and the result passes —
         same bootstrap rule as :meth:`assert_screen`.
+
+        `threshold` переопределяет порог SSIM для этого сравнения. Пригодно для
+        «мягких» проверок наличия (значок есть, но может быть выделен/в фокусе),
+        где попиксельная строгость 0.99 не нужна.
         """
         crop = await self.capture_region(name, box)
-        return self.screenshot.comparator.compare(crop, name, self.session.vm_id)
+        comparator = self.screenshot.comparator
+        if threshold is not None and threshold != comparator.threshold:
+            from src.screenshot_compare import ScreenshotComparator
+
+            comparator = ScreenshotComparator(threshold=threshold)
+        return comparator.compare(crop, name, self.session.vm_id)
 
     async def assert_region(
-        self, name: str, box: Tuple[int, int, int, int]
+        self,
+        name: str,
+        box: Tuple[int, int, int, int],
+        threshold: Optional[float] = None,
     ) -> ComparisonResult:
         """Crop the screen to `box`, compare against baseline, fail on mismatch."""
-        result = await self.compare_region(name, box)
+        result = await self.compare_region(name, box, threshold)
         if not result.passed:
             message = [
                 f"Область '{name}' не совпала с эталоном: SSIM={result.score:.6f} "
