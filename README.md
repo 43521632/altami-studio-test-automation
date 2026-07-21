@@ -301,13 +301,25 @@ class TestLogin(BaseVMTest):
         await self.assert_screen("login")     # сравнение с эталоном по SSIM
 ```
 
-Доступные методы `BaseVMTest`: `click`, `double_click`, `type_text`, `press`,
-`capture`, `assert_screen`, `qmp_execute`, `get_vm_status`.
+Доступные методы `BaseVMTest`: `click`, `double_click`, `glide`, `glide_click`,
+`type_text`, `press`, `capture`, `assert_screen`, `capture_region`,
+`compare_region`, `assert_region`, `qmp_execute`, `get_vm_status`.
 Полный набор QMP-примитивов — через `self.qmp` (`mouse_drag`, `mouse_move`,
 `mouse_button`, `screendump`, `detect_resolution`).
 
 **Ввод не-ASCII текста (кириллица) не поддерживается** — раскладка qcode в QMP
 американская. Используйте буфер обмена или переключение раскладки в гостевой ОС.
+
+### Подробные руководства
+
+* [docs/writing-tests.md](docs/writing-tests.md) — базовые понятия: запуск ВМ,
+  автологин, эмуляция мыши/клавиатуры, сравнение с эталоном, частые грабли.
+* [docs/creating-ui-test-case.md](docs/creating-ui-test-case.md) — как собрать
+  UI-кейс с нуля для **любой** ОС: где брать скриншоты и координаты, `move`
+  против `glide` (почему меню требует плавного движения), клавиши qcode,
+  проверка надписей и окон по областям (region SSIM), «проверил-повторил»,
+  разбор на примере теста Altami Studio. Плюс инструмент разведки координат
+  `scripts/ui_probe.py`.
 
 ---
 
