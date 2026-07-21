@@ -14,9 +14,10 @@ Example:
             await self.assert_screen("login_screen")
 """
 
+import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import pytest
 
@@ -52,9 +53,41 @@ class BaseVMTest:
 
     # --- Ввод ---------------------------------------------------------------
 
+    #: последняя позиция указателя — старт для плавного перемещения glide()
+    _ptr: Tuple[int, int] = (960, 600)
+
     async def click(self, x: int, y: int, button: str = "left") -> None:
         """Click at absolute guest pixel coordinates."""
         await self.qmp.mouse_click(x, y, button)
+        self._ptr = (x, y)
+
+    async def glide(
+        self, x: int, y: int, steps: int = 24, step_delay: float = 0.015
+    ) -> None:
+        """Move the pointer to (x, y) as continuous motion, not a teleport.
+
+        A single absolute-position event does not reliably trigger Qt hover /
+        submenu-open logic in the fly menu — the widget needs a stream of
+        movement events. We interpolate from the last known pointer position
+        in small steps so menus highlight and expand the way they do under a
+        real mouse.
+        """
+        x0, y0 = self._ptr
+        for i in range(1, steps + 1):
+            nx = round(x0 + (x - x0) * i / steps)
+            ny = round(y0 + (y - y0) * i / steps)
+            await self.qmp.mouse_move(nx, ny)
+            if step_delay:
+                await asyncio.sleep(step_delay)
+        self._ptr = (x, y)
+
+    async def glide_click(
+        self, x: int, y: int, button: str = "left", settle: float = 0.4
+    ) -> None:
+        """Glide the pointer onto (x, y), let it highlight, then click."""
+        await self.glide(x, y)
+        await asyncio.sleep(settle)
+        await self.click(x, y, button)
 
     async def double_click(self, x: int, y: int) -> None:
         """Double-click at absolute guest pixel coordinates."""
@@ -77,6 +110,57 @@ class BaseVMTest:
     async def assert_screen(self, name: str) -> ComparisonResult:
         """Capture and assert the screen matches its baseline (SSIM)."""
         return await self.screenshot.assert_matches(name)
+
+    # --- Скриншоты: сравнение по области -----------------------------------
+    # Полноэкранное сравнение ломается, когда в кадре есть меняющиеся зоны
+    # (часы, список сессий с датами, курсор). Тогда тест строят вокруг
+    # статичной области — вырезают её из кадра и сверяют только ей.
+
+    async def capture_region(
+        self, name: str, box: Tuple[int, int, int, int]
+    ) -> Path:
+        """Capture the screen and crop it to `box` = (left, top, right, bottom).
+
+        Returns the path to the cropped PNG (a sibling of the full capture).
+        Coordinates are guest pixels from the top-left corner.
+        """
+        from PIL import Image
+
+        full = await self.capture(name)
+        crop_path = full.with_name(f"{full.stem}_region.png")
+        with Image.open(full) as img:
+            img.crop(box).save(crop_path)
+        return crop_path
+
+    async def compare_region(
+        self, name: str, box: Tuple[int, int, int, int]
+    ) -> ComparisonResult:
+        """Crop the screen to `box` and compare it against the baseline (no fail).
+
+        A missing baseline is created from the crop and the result passes —
+        same bootstrap rule as :meth:`assert_screen`.
+        """
+        crop = await self.capture_region(name, box)
+        return self.screenshot.comparator.compare(crop, name, self.session.vm_id)
+
+    async def assert_region(
+        self, name: str, box: Tuple[int, int, int, int]
+    ) -> ComparisonResult:
+        """Crop the screen to `box`, compare against baseline, fail on mismatch."""
+        result = await self.compare_region(name, box)
+        if not result.passed:
+            message = [
+                f"Область '{name}' не совпала с эталоном: SSIM={result.score:.6f} "
+                f"(нужно > {result.threshold})",
+                f"  текущий: {result.current_path}",
+                f"  эталон:  {result.baseline_path}",
+            ]
+            if result.diff_path:
+                message.append(f"  различия: {result.diff_path}")
+            if result.reason:
+                message.append(f"  причина: {result.reason}")
+            pytest.fail("\n".join(message))
+        return result
 
     # --- Состояние ВМ -------------------------------------------------------
 
