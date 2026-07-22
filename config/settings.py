@@ -85,6 +85,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", _log_cfg.get("log_level", "INFO"))
 # консоли нужны только проблемы — статусы тестов туда печатает
 # src/interactive_plugin.py, и поток INFO от QMP их заглушал.
 CONSOLE_LOG_LEVEL = os.getenv("CONSOLE_LOG_LEVEL", "WARNING")
+# Сколько логов прогонов держать на каждую ВМ (logs/pytest_<вм>_<дата>.log).
+# Старые удаляются при старте нового прогона — см. tests/conftest.py.
+LOG_RETENTION_RUNS = int(os.getenv("LOG_RETENTION_RUNS", "30"))
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 LOG_ROTATION_MAX_BYTES = int(_log_cfg.get("rotation_max_bytes", 10 * 1024 * 1024))

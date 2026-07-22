@@ -46,10 +46,12 @@ class InteractiveRunControl:
 
     def pytest_sessionstart(self, session: pytest.Session) -> None:
         """Warn about the silent stretch before the first test starts."""
+        log_file = session.config.getoption("log_file", None)
         console.print(
-            "[dim]Готовим ВМ: загрузка и вход в систему занимают до ~2 минут. "
-            "Подробный лог — logs/test_run.log[/dim]"
+            "[dim]Готовим ВМ: загрузка и вход в систему занимают до ~2 минут.[/dim]"
         )
+        if log_file:
+            console.print(f"[dim]Подробный лог прогона: {log_file}[/dim]")
 
     # --- Служебное ----------------------------------------------------------
 

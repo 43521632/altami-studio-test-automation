@@ -10,13 +10,15 @@ against it sequentially — a single guest cannot be driven concurrently.
 
 import logging
 import os
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import pytest
 import pytest_asyncio
 
-from config.settings import SCREENSHOT_DIR
+from config.settings import LOG_RETENTION_RUNS, LOGS_DIR, SCREENSHOT_DIR
 from src.case_ids import case_id_for
 from src.failure_step import describe_failure
 from src.logging_setup import setup_logging
@@ -31,8 +33,69 @@ VM_ID = os.environ.get("VM_ID", "windows")
 VM_NAME_OVERRIDE = os.environ.get("VM_NAME_OVERRIDE") or None
 
 
+def _per_run_log_file() -> Path:
+    """Path of this run's pytest log: `logs/pytest_<вм>_<дата>_<время>.log`.
+
+    Имя с ВМ, а не только с временем: два прогона разных ОС идут параллельно и
+    писали бы в один файл.
+    """
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path(LOGS_DIR) / f"pytest_{VM_ID}_{stamp}.log"
+
+
+def _prune_old_logs(current: Path, keep: int = LOG_RETENTION_RUNS) -> None:
+    """Keep only the newest `keep` run logs of this VM, delete the rest.
+
+    Удаляются исключительно файлы, которые мы сами и создали: маска строгая —
+    `pytest_<вм>_<8 цифр>_<6 цифр>.log`. Ссылка `..._last.log` под неё не
+    подходит, чужие файлы в logs/ — тоже.
+
+    Лог текущего прогона (`current`) не трогаем никогда. Сортировка идёт по
+    имени, то есть по времени старта, и при сбитых часах свежий файл мог бы
+    оказаться «старым» — прогон остался бы без своего лога.
+    """
+    if keep <= 0:
+        return
+
+    pattern = re.compile(rf"^pytest_{re.escape(VM_ID)}_\d{{8}}_\d{{6}}\.log$")
+    try:
+        files = [
+            path for path in Path(LOGS_DIR).iterdir()
+            if path.is_file() and not path.is_symlink() and pattern.match(path.name)
+        ]
+    except OSError as e:
+        logger.debug("Не удалось просмотреть %s: %s", LOGS_DIR, e)
+        return
+
+    # Имя содержит дату и время, поэтому обычная сортировка по имени = по времени
+    for old in sorted(files, key=lambda p: p.name, reverse=True)[keep:]:
+        if old.name == current.name:
+            continue
+        try:
+            old.unlink()
+            logger.debug("Удалён старый лог прогона: %s", old)
+        except OSError as e:
+            logger.debug("Не удалось удалить %s: %s", old, e)
+
+
+def _link_latest(target: Path) -> None:
+    """Point `logs/pytest_<вм>_last.log` at this run's log, for `tail -f`.
+
+    Обычный файл с таким именем не трогаем — удаляем только собственную ссылку.
+    """
+    link = Path(LOGS_DIR) / f"pytest_{VM_ID}_last.log"
+    try:
+        if link.is_symlink():
+            link.unlink()
+        elif link.exists():
+            return
+        link.symlink_to(target.name)
+    except OSError as e:
+        logger.debug("Не удалось обновить ссылку %s: %s", link, e)
+
+
 def pytest_configure(config: pytest.Config) -> None:
-    """Register OS markers and initialise logging."""
+    """Register OS markers, point the log at this run's file, start logging."""
     for marker, description in [
         ("windows", "Тесты для Windows ВМ"),
         ("astra", "Тесты для Astra Linux ВМ"),
@@ -45,6 +108,21 @@ def pytest_configure(config: pytest.Config) -> None:
         ("system", "Системные тесты"),
     ]:
         config.addinivalue_line("markers", f"{marker}: {description}")
+
+    # Свой файл на каждый прогон вместо вечно дописываемого logs/pytest.log.
+    # Явный --log-file в командной строке уважаем. Плагин логирования создаётся
+    # в pytest_configure с trylast, то есть уже после этого хука, и подхватит
+    # подменённое значение.
+    if not config.getoption("log_file"):
+        run_log = _per_run_log_file()
+        run_log.parent.mkdir(parents=True, exist_ok=True)
+        config.option.log_file = str(run_log)
+        # Создаём файл сразу: плагин логирования откроет его позже, а нам он
+        # нужен уже сейчас, чтобы попасть в счёт хранимых прогонов
+        run_log.touch(exist_ok=True)
+        _link_latest(run_log)
+        _prune_old_logs(run_log)
+
     setup_logging()
 
 
