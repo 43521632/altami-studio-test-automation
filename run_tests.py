@@ -8,6 +8,10 @@ Examples:
     python run_tests.py --os windows --kiwi         # с отправкой в Kiwi TCMS
     python run_tests.py --restart                   # доделать прерванный прогон
     python run_tests.py --menu                      # интерактивное меню управления ВМ
+    python run_tests.py --console windows           # отдельная консоль: интерактивный
+                                                    # прогон тестов Windows с паузой
+                                                    # при падении теста
+    python run_tests.py --session windows           # то же, но в текущем окне
 """
 
 import argparse
@@ -257,6 +261,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Открыть интерактивное меню управления ВМ",
     )
     parser.add_argument(
+        "--console", metavar="ВМ",
+        help="Открыть отдельную консоль с интерактивным прогоном тестов этой ВМ",
+    )
+    parser.add_argument(
+        "--session", metavar="ВМ",
+        help="Провести интерактивный сеанс тестов в ТЕКУЩЕЙ консоли "
+             "(так лаунчер запускает сеанс внутри открытого окна)",
+    )
+    parser.add_argument(
         "--log-level", default=None,
         help="Уровень логирования: DEBUG | INFO | WARNING | ERROR",
     )
@@ -267,6 +280,21 @@ def main() -> int:
     """CLI entry point."""
     args = build_parser().parse_args()
     setup_logging(level=args.log_level)
+
+    if args.session:
+        from src.session_console import run_console_session
+
+        return run_console_session(args.session, args.vm_name)
+
+    if args.console:
+        from src.console_launcher import ConsoleLauncherError, launch_console
+
+        try:
+            console.print(f"[green]OK[/green] {launch_console(args.console, args.vm_name)}")
+        except ConsoleLauncherError as e:
+            console.print(f"[bold red]Ошибка:[/bold red] {e}")
+            return 2
+        return 0
 
     if args.menu:
         from src.vm_menu import VMMenu

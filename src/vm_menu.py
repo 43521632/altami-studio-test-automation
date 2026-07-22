@@ -245,6 +245,60 @@ class VMMenu:
             except LibvirtManagerError as e:
                 console.print(f"[bold red]ОШИБКА[/bold red] {name}: {e}")
 
+    # --- Запуск тестов ---------------------------------------------------
+
+    def _show_test_targets(self) -> List[str]:
+        """Print the VMs available for testing. Returns their config ids."""
+        from src.vm_lock import is_busy
+
+        vm_ids = [
+            vm_id for vm_id in get_all_vm_ids()
+            if get_vm_config(vm_id).get("enabled")
+        ]
+        if not vm_ids:
+            console.print(
+                "[yellow]Нет ни одной ВМ с enabled: true в "
+                "config/vms_config.yaml[/yellow]"
+            )
+            return []
+
+        table = Table(title="ВМ для тестирования", header_style="bold cyan")
+        table.add_column("#", justify="right", width=3)
+        table.add_column("ВМ", style="bold")
+        table.add_column("Домен в virt-manager")
+        table.add_column("Тесты")
+        table.add_column("Консоль")
+
+        for idx, vm_id in enumerate(vm_ids, 1):
+            config = get_vm_config(vm_id)
+            busy = is_busy(vm_id)
+            table.add_row(
+                str(idx),
+                vm_id,
+                config.get("vm_name", "—"),
+                config.get("test_path", "—"),
+                "[yellow]уже открыта[/yellow]" if busy else "[green]свободна[/green]",
+            )
+        console.print(table)
+        return vm_ids
+
+    def action_run_tests(self) -> None:
+        """Menu action: open a dedicated test console per selected VM.
+
+        Одна ВМ — одна консоль. Разные ВМ можно гонять параллельно, каждую в
+        своём окне.
+        """
+        from src.console_launcher import ConsoleLauncherError, launch_console
+
+        vm_ids = self._show_test_targets()
+        if not vm_ids:
+            return
+        for vm_id in self.select_vms(vm_ids):
+            try:
+                console.print(f"[green]OK[/green] {launch_console(vm_id)}")
+            except ConsoleLauncherError as e:
+                console.print(f"[bold red]ОШИБКА[/bold red] {vm_id}: {e}")
+
     # --- Главный цикл ----------------------------------------------------
 
     _ACTIONS = [
@@ -255,6 +309,7 @@ class VMMenu:
         ("5", "Перезапустить ВМ", "action_restart"),
         ("6", "Скриншот ВМ", "action_screenshot"),
         ("7", "Информация о хосте", "show_host"),
+        ("8", "Запустить тесты (отдельная консоль на ВМ)", "action_run_tests"),
         ("0", "Выход", None),
     ]
 
