@@ -27,7 +27,7 @@ TEST_CASE_MAP = {
     "tests/windows/test_windows_system.py::TestWindowsUI::test_screenshot_is_captured": "",
     "tests/windows/test_windows_system.py::TestWindowsUI::test_resolution_matches_config": "",
     "tests/windows/test_windows_system.py::TestWindowsUI::test_input_injection_works": "",
-    "tests/windows/test_windows_altami_studio.py::TestWindowsAltamiStudio::test_altami_studio_demo_launch": "",
+    "tests/windows/test_windows_altami_studio.py::TestWindowsAltamiStudio::test_altami_studio_demo_launch": "TC-85",
     # --- Astra Linux ---------------------------------------------------------
     "tests/Astra/test_astra_system.py::TestAstraSystem::test_astra_status": "",
     "tests/Astra/test_astra_system.py::TestAstraSystem::test_astra_cpu_info": "",
@@ -37,7 +37,7 @@ TEST_CASE_MAP = {
     "tests/Astra/test_astra_system.py::TestAstraUI::test_screenshot_is_captured": "",
     "tests/Astra/test_astra_system.py::TestAstraUI::test_resolution_matches_config": "",
     "tests/Astra/test_astra_system.py::TestAstraUI::test_input_injection_works": "",
-    "tests/Astra/test_astra_altami_studio.py::TestAstraAltamiStudio::test_altami_studio_demo_launch": "",
+    "tests/Astra/test_astra_altami_studio.py::TestAstraAltamiStudio::test_altami_studio_demo_launch": "TC-84",
     # --- macOS ---------------------------------------------------------------
     "tests/macos/test_macos_system.py::TestMacosSystem::test_macos_status": "",
     "tests/macos/test_macos_system.py::TestMacosSystem::test_macos_cpu_info": "",
