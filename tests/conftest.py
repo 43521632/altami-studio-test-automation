@@ -36,6 +36,7 @@ def pytest_configure(config: pytest.Config) -> None:
         ("astra", "Тесты для Astra Linux ВМ"),
         ("macos", "Тесты для macOS ВМ"),
         ("ui", "UI-тесты со сравнением скриншотов"),
+        ("app", "Тесты, запускающие Altami Studio (идут в конце прогона)"),
         ("smoke", "Быстрые проверки доступности ВМ"),
         ("network", "Сетевые тесты"),
         ("security", "Тесты безопасности"),
@@ -43,6 +44,20 @@ def pytest_configure(config: pytest.Config) -> None:
     ]:
         config.addinivalue_line("markers", f"{marker}: {description}")
     setup_logging()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
+    """Отправить тесты с маркером `app` в конец прогона.
+
+    Altami Studio остаётся открытым после своих тестов — так задумано, на нём
+    будут строиться следующие сценарии. Но окно приложения закрывает рабочий
+    стол, а `test_desktop_matches_baseline` сверяет именно чистый стол с
+    эталоном. По алфавиту файл ...altami_studio.py собирается раньше
+    ...system.py, поэтому без этой сортировки тест стола падал бы с SSIM ~0.88.
+
+    Сортировка стабильна: порядок остальных тестов не меняется.
+    """
+    items.sort(key=lambda item: 1 if item.get_closest_marker("app") else 0)
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)

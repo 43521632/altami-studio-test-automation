@@ -77,6 +77,10 @@ POLL_INTERVAL = 0.4      # как часто опрашивать экран
 
 @pytest.mark.windows
 @pytest.mark.ui
+# app: приложение остаётся открытым после теста, поэтому прогон идёт последним —
+# иначе окно Altami перекрывает рабочий стол тестам, которые сверяют его с
+# эталоном (сортировка — в tests/conftest.py).
+@pytest.mark.app
 class TestWindowsAltamiStudio(BaseVMTest):
     """Запуск Altami Studio с рабочего стола и проверка стартовых окон."""
 

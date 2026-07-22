@@ -63,6 +63,10 @@ DISMISS_WAIT = 1.5       # окно закрывается после клика
 
 @pytest.mark.astra
 @pytest.mark.ui
+# app: приложение остаётся открытым после теста, поэтому прогон идёт последним —
+# иначе окно Altami перекрывает рабочий стол тестам, которые сверяют его с
+# эталоном (сортировка — в tests/conftest.py).
+@pytest.mark.app
 class TestAstraAltamiStudio(BaseVMTest):
     """Запуск Altami Studio из меню «Научные» и проверка стартовых окон."""
 
