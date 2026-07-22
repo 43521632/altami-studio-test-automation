@@ -18,6 +18,7 @@
     click X Y [btn]      клик (btn: left|right|middle, по умолчанию left)
     glideclick X Y [btn] плавно навести и кликнуть (надёжно для меню/кнопок)
     dclick X Y           двойной клик
+    scroll up|down [N]   прокрутить колесо под курсором (N щелчков, по умолч. 3)
     key K [K2 ...]       нажать клавишу/комбинацию (qcode: ret esc ctrl ...)
     type "текст"         набрать ASCII-строку (кириллица не поддерживается)
     boot                 запустить ВМ, дождаться загрузки и войти (как тесты)
@@ -141,6 +142,13 @@ async def cmd_dclick(x, y):
     print(f"dclick {x},{y}")
 
 
+async def cmd_scroll(direction, clicks):
+    """Прокрутить колесо под текущим курсором: scroll up|down [щелчков]."""
+    up = direction == "up"
+    await _with_qmp(lambda q: q.mouse_wheel(clicks, up=up))
+    print(f"scroll {direction} x{clicks}")
+
+
 async def cmd_key(keys):
     await _with_qmp(lambda q: q.send_keys(keys))
     print(f"key {'+'.join(keys)}")
@@ -176,6 +184,7 @@ def main():
         "click": lambda: cmd_click(int(args[0]), int(args[1]), *args[2:3]),
         "glideclick": lambda: cmd_glideclick(int(args[0]), int(args[1]), *args[2:3]),
         "dclick": lambda: cmd_dclick(int(args[0]), int(args[1])),
+        "scroll": lambda: cmd_scroll(args[0], int(args[1]) if len(args) > 1 else 3),
         "key": lambda: cmd_key(args),
         "type": lambda: cmd_type(args[0]),
         "boot": lambda: cmd_boot(),

@@ -404,6 +404,23 @@ class QMPSession:
         await self.mouse_button(False, button)
         logger.debug("%s: клик %s в (%d, %d)", self.vm_id, button, x, y)
 
+    async def mouse_wheel(
+        self, clicks: int = 1, up: bool = True, interval_s: float = 0.08
+    ) -> None:
+        """Scroll the wheel `clicks` notches under the current pointer position.
+
+        QEMU передаёт колесо как нажатие псевдо-кнопки wheel-up/wheel-down, по
+        событию на каждый щелчок. Прокрутка идёт там, где СЕЙЧАС курсор, —
+        перед вызовом наведите его на нужную панель (mouse_move/glide).
+        """
+        button = "wheel-up" if up else "wheel-down"
+        for _ in range(clicks):
+            await self.mouse_button(True, button)
+            await self.mouse_button(False, button)
+            if interval_s:
+                await asyncio.sleep(interval_s)
+        logger.debug("%s: колесо %s x%d", self.vm_id, button, clicks)
+
     async def mouse_double_click(self, x: int, y: int, interval_s: float = 0.1) -> None:
         """Perform a double click at (x, y)."""
         await self.mouse_click(x, y)
