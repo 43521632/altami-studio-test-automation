@@ -81,6 +81,10 @@ DIFF_DIR = _resolve(_log_cfg.get("diff_dir"), "./screenshots/diff")
 REPORT_DIR = _resolve(_log_cfg.get("report_dir"), "./reports")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", _log_cfg.get("log_level", "INFO"))
+# Уровень для КОНСОЛИ отдельно от файла: в файл пишем всё (до DEBUG), а в
+# консоли нужны только проблемы — статусы тестов туда печатает
+# src/interactive_plugin.py, и поток INFO от QMP их заглушал.
+CONSOLE_LOG_LEVEL = os.getenv("CONSOLE_LOG_LEVEL", "WARNING")
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 LOG_ROTATION_MAX_BYTES = int(_log_cfg.get("rotation_max_bytes", 10 * 1024 * 1024))

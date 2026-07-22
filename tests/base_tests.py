@@ -46,10 +46,8 @@ class BaseVMTest:
         self.screenshot = screenshot
         self.config: Dict[str, Any] = vm_session.config
         yield
-        # Скриншот при падении — диагностика, ради которой стоит потерпеть I/O
-        report = getattr(request.node, "rep_call", None)
-        if report is not None and report.failed:
-            logger.error("Тест '%s' упал", request.node.name)
+        # Падение логирует хук в tests/conftest.py — с ID кейса, шагом и
+        # причиной. Дублировать его здесь строкой «тест упал» смысла нет.
 
     # --- Ввод ---------------------------------------------------------------
 

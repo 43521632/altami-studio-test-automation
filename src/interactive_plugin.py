@@ -44,13 +44,26 @@ class InteractiveRunControl:
         self.manually_skipped: List[str] = []
         self.restarted: List[str] = []
 
+    def pytest_sessionstart(self, session: pytest.Session) -> None:
+        """Warn about the silent stretch before the first test starts."""
+        console.print(
+            "[dim]Готовим ВМ: загрузка и вход в систему занимают до ~2 минут. "
+            "Подробный лог — logs/test_run.log[/dim]"
+        )
+
     # --- Служебное ----------------------------------------------------------
 
     @staticmethod
     def _label(item: pytest.Item) -> str:
-        """Human-readable test name with its case id, when mapped."""
+        """Test name with its case id: короткая строка для консоли.
+
+        Путь до файла опускаем — в консоли важны имя кейса и его ID, а полный
+        nodeid всегда есть в логе прогона.
+        """
+        parts = item.nodeid.split("::")
+        name = "::".join(parts[1:]) if len(parts) > 1 else item.nodeid
         case_id = case_id_for(item.nodeid)
-        return f"{item.nodeid}" + (f"  [magenta]({case_id})[/magenta]" if case_id else "")
+        return name + (f"  [magenta][{case_id}][/magenta]" if case_id else "")
 
     @staticmethod
     def _outcome(reports) -> str:
@@ -68,14 +81,26 @@ class InteractiveRunControl:
 
     @staticmethod
     def _print_failure(reports) -> None:
-        """Print the tail of the traceback so the failure is diagnosable in place."""
+        """Print where the test broke: the failing step, the reason, the diff.
+
+        Разбор готовит tests/conftest.py и кладёт на отчёт. Трассировку целиком
+        не печатаем — она есть в logs/pytest.log, а в консоли нужен шаг.
+        """
         for report in reports:
             if not report.failed:
                 continue
-            text = (report.longreprtext or "").strip()
-            if text:
-                tail = text.splitlines()[-12:]
-                console.print("[dim]" + "\n".join(tail) + "[/dim]")
+            info = getattr(report, "failure_info", None)
+            if info is None:
+                # Отчёт пришёл не от нашего conftest — показываем что есть
+                text = (report.longreprtext or "").strip().splitlines()
+                if text:
+                    console.print(f"   [dim]{text[-1]}[/dim]")
+                continue
+            if info.step:
+                console.print(f"   [bold]шаг:[/bold]     {info.step}")
+            console.print(f"   [bold]причина:[/bold] {info.reason}")
+            if info.diff:
+                console.print(f"   [dim]{info.diff}[/dim]")
 
     def pytest_report_teststatus(self, report):
         """Silence pytest's own progress marks — статус печатает плагин.
@@ -132,6 +157,9 @@ class InteractiveRunControl:
         attempt = 0
         while True:
             attempt += 1
+            if attempt == 1:
+                # Тест идёт минутами — показываем, что именно сейчас работает
+                console.print(f"[dim]▶ {self._label(item)}[/dim]")
             if attempt > 1:
                 # Без сброса запроса фикстур повтор падает на кэше прошлой попытки
                 if hasattr(item, "_initrequest"):

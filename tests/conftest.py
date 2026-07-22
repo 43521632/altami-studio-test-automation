@@ -17,6 +17,8 @@ import pytest
 import pytest_asyncio
 
 from config.settings import SCREENSHOT_DIR
+from src.case_ids import case_id_for
+from src.failure_step import describe_failure
 from src.logging_setup import setup_logging
 from src.screenshot_compare import ComparisonResult, ScreenshotComparator
 from src.vm_manager import VMManager, VMSession
@@ -60,12 +62,53 @@ def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
     items.sort(key=lambda item: 1 if item.get_closest_marker("app") else 0)
 
 
+def case_label(nodeid: str) -> str:
+    """Test name prefixed with its case id from src/case_ids.py, when mapped."""
+    case_id = case_id_for(nodeid)
+    return f"[{case_id}] {nodeid}" if case_id else nodeid
+
+
+# Статусы тестов в консоли печатает src/interactive_plugin.py — в более
+# читаемом виде. Лог-записи об этом же помечаем как «не для консоли», иначе
+# каждый тест выводился бы дважды. В файле лога они остаются.
+_LOG_ONLY = {"console": False}
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Log the start of every test together with its case id."""
+    logger.info("СТАРТ %s", case_label(item.nodeid), extra=_LOG_ONLY)
+
+
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Expose each phase's report on the item, so fixtures can see failures."""
+    """Expose each phase's report on the item, so fixtures can see failures.
+
+    Здесь же в лог уходит итог теста с ID кейса, а у падения — шаг и причина.
+    Разбор падения кладётся на отчёт (`report.failure_info`), чтобы консоль
+    (src/interactive_plugin.py) показывала ровно то же, что попало в лог.
+    """
     outcome = yield
     report = outcome.get_result()
     setattr(item, f"rep_{report.when}", report)
+
+    if report.failed and call.excinfo is not None:
+        report.failure_info = describe_failure(call.excinfo)
+
+    # Итог: обычный тест закрывается фазой call, пропущенный — фазой setup
+    if report.when != "call" and not report.skipped:
+        return
+
+    label = case_label(item.nodeid)
+    if report.failed:
+        info = getattr(report, "failure_info", None)
+        logger.error(
+            "FAILED %s — %s", label, info.as_log_line() if info else "",
+            extra=_LOG_ONLY,
+        )
+    elif report.skipped:
+        logger.info("SKIPPED %s", label, extra=_LOG_ONLY)
+    else:
+        logger.info("PASSED %s", label, extra=_LOG_ONLY)
 
 
 # --- Фикстуры ВМ ------------------------------------------------------------

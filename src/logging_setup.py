@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from config.settings import (
+    CONSOLE_LOG_LEVEL,
     LOG_DATE_FORMAT,
     LOG_FORMAT,
     LOG_LEVEL,
@@ -18,12 +19,31 @@ from config.settings import (
 _configured = False
 
 
+class ConsoleFilter(logging.Filter):
+    """Hide records marked with ``extra={"console": False}`` from the console.
+
+    Так помечают строки, которые в консоли уже показаны в более удобном виде:
+    статусы тестов печатает src/interactive_plugin.py, и дублировать их
+    лог-записями значит удваивать вывод. В файле лога они остаются.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return getattr(record, "console", True)
+
+
 def setup_logging(
     level: Optional[str] = None,
     log_dir: Path = LOGS_DIR,
     use_rich: bool = True,
+    console_level: Optional[str] = None,
 ) -> Path:
     """Configure root logging: rotating file handler plus console output.
+
+    Файл и консоль намеренно живут на разных уровнях. В файл идёт всё вплоть до
+    DEBUG — по нему разбирают падения. В консоль (`console_level`, по умолчанию
+    CONSOLE_LOG_LEVEL=WARNING) — только проблемы: ход прогона там печатает
+    src/interactive_plugin.py, и поток INFO от QMP и сравнения скриншотов делал
+    вывод нечитаемым.
 
     Safe to call more than once — later calls are no-ops.
 
@@ -62,6 +82,10 @@ def setup_logging(
     else:
         console = logging.StreamHandler()
         console.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
+    console.setLevel(
+        getattr(logging, (console_level or CONSOLE_LOG_LEVEL).upper(), logging.WARNING)
+    )
+    console.addFilter(ConsoleFilter())
     root.addHandler(console)
 
     # libvirt и asyncio на DEBUG слишком шумные — держим их на WARNING
