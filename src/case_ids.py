@@ -8,7 +8,8 @@
     python -m pytest tests/windows --collect-only -q
 """
 
-from typing import Optional
+import re
+from typing import List, Optional, Tuple
 
 # ==============================================================================
 # MANUAL CASE ID MATCHING (BEGIN)
@@ -72,3 +73,31 @@ def case_id_for(nodeid: str) -> Optional[str]:
 
     # Ключ есть, но ID ещё не проставлен — это не «не найдено», а «не смэтчено»
     return None
+
+
+def _id_sort_key(case_id: str) -> Tuple[str, int, str]:
+    """Sort key that puts TC-9 before TC-10 instead of after it."""
+    match = re.match(r"^(\D*)(\d+)(.*)$", case_id)
+    if not match:
+        return (case_id, 0, "")
+    prefix, number, rest = match.groups()
+    return (prefix.upper(), int(number), rest)
+
+
+def mapped_cases(test_path: Optional[str] = None) -> List[Tuple[str, str]]:
+    """Return (case_id, nodeid) for tests that HAVE a case id, sorted by id.
+
+    Тесты без проставленного ID сюда не попадают: режим разработчика работает
+    только с теми, что заведены в тестовой системе, — по ID их и называют.
+
+    `test_path` отбирает по началу пути («tests/windows») — так список
+    сужается до одной ВМ.
+    """
+    prefix = test_path.replace("\\", "/").lstrip("./").rstrip("/") if test_path else ""
+
+    cases = [
+        (case_id, nodeid)
+        for nodeid, case_id in TEST_CASE_MAP.items()
+        if case_id and (not prefix or nodeid.replace("\\", "/").startswith(prefix))
+    ]
+    return sorted(cases, key=lambda pair: (_id_sort_key(pair[0]), pair[1]))

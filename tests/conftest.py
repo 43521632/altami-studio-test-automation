@@ -19,7 +19,7 @@ import pytest
 import pytest_asyncio
 
 from config.settings import LOG_RETENTION_RUNS, LOGS_DIR, SCREENSHOT_DIR
-from src.case_ids import case_id_for
+from src.case_ids import TEST_CASE_MAP, case_id_for
 from src.failure_step import describe_failure
 from src.logging_setup import setup_logging
 from src.screenshot_compare import ComparisonResult, ScreenshotComparator
@@ -94,6 +94,20 @@ def _link_latest(target: Path) -> None:
         logger.debug("Не удалось обновить ссылку %s: %s", link, e)
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Add `--case TC-85` — run exactly the tests with these case ids."""
+    parser.addoption(
+        "--case",
+        action="append",
+        default=[],
+        metavar="TC-85",
+        help=(
+            "Прогнать только тест(ы) с этим ID кейса из src/case_ids.py. "
+            "Можно повторять: --case TC-85 --case TC-84. Регистр не важен."
+        ),
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register OS markers, point the log at this run's file, start logging."""
     for marker, description in [
@@ -126,8 +140,46 @@ def pytest_configure(config: pytest.Config) -> None:
     setup_logging()
 
 
+def _select_by_case_id(config: pytest.Config, items) -> None:
+    """Оставить в прогоне только тесты с ID кейсов из `--case`.
+
+    Отбор по ID, а не по имени файла: ID — это то, чем кейс называют в
+    тестовой системе и в разговоре, а где лежит тест, помнить не обязано.
+    Несовпавшие тесты именно снимаются с прогона (deselect), а не помечаются
+    пропущенными: пропуски засоряли бы отчёт десятками строк.
+    """
+    wanted = {case.strip().upper() for case in config.getoption("--case") if case.strip()}
+    if not wanted:
+        return
+
+    selected, deselected = [], []
+    for item in items:
+        case_id = case_id_for(item.nodeid)
+        (selected if case_id and case_id.upper() in wanted else deselected).append(item)
+
+    if not selected:
+        known = sorted({cid for cid in TEST_CASE_MAP.values() if cid})
+        raise pytest.UsageError(
+            f"Ни один тест не смэтчен с ID {', '.join(sorted(wanted))}.\n"
+            f"  Известные ID: {', '.join(known) if known else '(ни одного)'}\n"
+            f"  ID проставляются вручную в src/case_ids.py."
+        )
+
+    # Найденные ID могли покрыть не все запрошенные — молчать об этом нельзя,
+    # иначе опечатка в одном ID выглядела бы как успешный прогон по обоим.
+    found = {case_id_for(item.nodeid).upper() for item in selected}
+    if missing := wanted - found:
+        logger.warning(
+            "Не найдены тесты для ID: %s — прогон пойдёт без них",
+            ", ".join(sorted(missing)),
+        )
+
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
-    """Отправить тесты с маркером `app` в конец прогона.
+    """Отобрать тесты по `--case` и отправить тесты с маркером `app` в конец.
 
     Altami Studio остаётся открытым после своих тестов — так задумано, на нём
     будут строиться следующие сценарии. Но окно приложения закрывает рабочий
@@ -137,6 +189,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
 
     Сортировка стабильна: порядок остальных тестов не меняется.
     """
+    _select_by_case_id(config, items)
     items.sort(key=lambda item: 1 if item.get_closest_marker("app") else 0)
 
 

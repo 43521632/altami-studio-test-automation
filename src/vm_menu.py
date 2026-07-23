@@ -7,7 +7,7 @@ Run standalone:
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from rich.console import Console
 from rich.panel import Panel
@@ -299,6 +299,88 @@ class VMMenu:
             except ConsoleLauncherError as e:
                 console.print(f"[bold red]ОШИБКА[/bold red] {vm_id}: {e}")
 
+    def _show_cases(self, vm_id: str) -> List[Tuple[str, str]]:
+        """Print the tests of one VM that have a case id. Returns (id, nodeid)."""
+        from src.case_ids import mapped_cases
+
+        test_path = get_vm_config(vm_id).get("test_path") or f"tests/{vm_id}"
+        cases = mapped_cases(test_path)
+        if not cases:
+            console.print(
+                f"[yellow]У ВМ '{vm_id}' нет ни одного теста с проставленным ID.[/yellow]\n"
+                f"ID кейсов из Kiwi TCMS проставляются вручную в "
+                f"[bold]src/case_ids.py[/bold] — тест без ID сюда не попадёт."
+            )
+            return []
+
+        table = Table(title=f"Тесты с ID — {vm_id}", header_style="bold cyan")
+        table.add_column("#", justify="right", width=3)
+        table.add_column("ID кейса", style="bold magenta")
+        table.add_column("Тест")
+        table.add_column("Файл", style="dim")
+
+        for idx, (case_id, nodeid) in enumerate(cases, 1):
+            path, _, name = nodeid.partition("::")
+            table.add_row(str(idx), case_id, name.replace("::", " → "), path)
+        console.print(table)
+        return cases
+
+    def action_dev_test(self) -> None:
+        """Menu action: run ONE test by case id on ONE VM, in this console.
+
+        Режим разработки очередного теста. Регрессия гоняет цепочку целиком,
+        и состояние каждому тесту достаётся от предыдущего — но прогонять всю
+        цепочку ради состояния для нового теста избыточно. Здесь состояние ВМ
+        готовит пользователь (снапшот, клики руками), а мы запускаем ровно
+        один тест поверх готового состояния и НИЧЕГО не проверяем до него.
+
+        Запуск идёт в этой же консоли, а не в отдельном окне: при разработке
+        вывод теста нужен здесь и сейчас, рядом с правками.
+        """
+        from src.dev_run import run_single_case
+
+        vm_ids = self._show_test_targets()
+        if not vm_ids:
+            return
+        selected = self.select_vms(vm_ids, allow_multiple=False)
+        if not selected:
+            return
+        vm_id = selected[0]
+
+        console.print()
+        cases = self._show_cases(vm_id)
+        if not cases:
+            return
+
+        raw = Prompt.ask(
+            "Выберите тест (номер или ID кейса), Enter — отмена", default=""
+        ).strip()
+        if not raw:
+            return
+
+        if raw.isdigit() and 1 <= int(raw) <= len(cases):
+            case_id = cases[int(raw) - 1][0]
+        else:
+            wanted = raw.upper()
+            match = next((cid for cid, _ in cases if cid.upper() == wanted), None)
+            if not match:
+                console.print(f"[yellow]Нет теста с номером или ID '{raw}'[/yellow]")
+                return
+            case_id = match
+
+        console.print(
+            Panel(
+                f"ВМ: [bold]{vm_id}[/bold]\nКейс: [bold magenta]{case_id}[/bold magenta]\n\n"
+                "[yellow]Состояние ВМ не проверяется[/yellow] — тест пойдёт "
+                "поверх того, что сейчас на машине.",
+                title="[bold cyan]Режим разработчика[/bold cyan]",
+                border_style="cyan",
+            )
+        )
+        code = run_single_case(vm_id, case_id)
+        style = "green" if code == 0 else "bold red"
+        console.print(f"[{style}]pytest завершился с кодом {code}[/{style}]")
+
     # --- Главный цикл ----------------------------------------------------
 
     _ACTIONS = [
@@ -310,6 +392,7 @@ class VMMenu:
         ("6", "Скриншот ВМ", "action_screenshot"),
         ("7", "Информация о хосте", "show_host"),
         ("8", "Запустить тесты (отдельная консоль на ВМ)", "action_run_tests"),
+        ("9", "Режим разработчика: один тест по ID кейса", "action_dev_test"),
         ("0", "Выход", None),
     ]
 

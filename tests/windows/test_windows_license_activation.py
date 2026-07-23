@@ -1,9 +1,15 @@
 """UI-тест активации лицензии Altami Studio на Windows (файл Astra.alic).
 
 Стартовое состояние — конечное состояние TC-85: приложение уже запущено в
-демо-режиме, окно восстановления пропущено, открыто главное окно. Тест
-продолжает с этой точки, поэтому в файле есть шаг `_reach_tc85_state`: он
-доводит ВМ до нужного состояния сам, если тест запускают отдельно.
+демо-режиме, окно восстановления пропущено, открыто главное окно.
+
+Состояние тест НЕ готовит. Первым шагом он строго сверяет экран с эталоном
+стартового состояния и при расхождении падает, ничего не нажимая. Готовит
+состояние человек — снапшотом или руками (в регрессии его оставляет
+предыдущий тест цепочки). Так сделано намеренно: тест, который сам доводит
+машину до нужного состояния, прячет расхождение вместо того, чтобы о нём
+сообщить, и тем более не должен этого делать в режиме разработки, где за
+состояние отвечает тот, кто его готовил (см. src/dev_run.py).
 
 Сценарий:
 
@@ -105,15 +111,7 @@ DIALOG_TIMEOUT = 8.0       # окно мастера / диалог выбора
 FILE_LOAD_TIMEOUT = 10.0   # возврат в мастер после «Открыть» (min ~2с)
 ACTIVATION_TIMEOUT = 15.0  # экран «Процесс успешно завершен» после «Далее»
 TOAST_TIMEOUT = 10.0       # уведомление об активации после «Завершить»
-RESTORE_TIMEOUT = 30.0     # окно восстановления после старта
-# Первый запуск после отката снапшота — холодный: диск гостя ещё не прогрет,
-# и заставка висит заметно дольше обычного. Замеры 23.07.2026: в одном прогоне
-# приложение простояло на заставке больше 24с (кадр за кадром SSIM не менялся
-# вообще) и тест упал на прежнем 12-секундном лимите; в другом от двойного
-# клика до окна восстановления прошло 18с. Тест всегда запускают именно после
-# отката, поэтому холодному старту нужен отдельный, щедрый лимит. Ждать его
-# целиком не придётся: `_wait_first` выходит по первому появившемуся окну.
-COLD_LAUNCH_TIMEOUT = 45.0
+RESTORE_TIMEOUT = 30.0     # окно восстановления после перезапуска в шаге 8
 DISMISS_TIMEOUT = 6.0      # исчезновение окна после «Пропустить» / крестика
 CLOSE_TIMEOUT = 15.0       # закрытие приложения по крестику
 POLL_INTERVAL = 0.4        # как часто опрашивать экран
@@ -178,28 +176,6 @@ class TestWindowsLicenseActivation(BaseVMTest):
             result = await self.compare_region(name, box)
         return result
 
-    async def _wait_first(self, targets, timeout=10.0, interval=POLL_INTERVAL):
-        """Ждать ту из нескольких областей, которая совпадёт с эталоном первой.
-
-        targets — последовательность (имя, область). Возвращает имя совпавшей
-        области либо None по таймауту.
-
-        Нужно там, где окно необязательное: ждать его в одиночку значит
-        простоять весь лимит уже после того, как экран пришёл в нужное
-        состояние. Опрос идёт быстрым путём (~0.05с на область), поэтому
-        несколько областей за итерацию стоят дешевле, чем раньше стоила одна.
-        """
-        loop = asyncio.get_event_loop()
-        deadline = loop.time() + timeout
-        await self._park_mouse()
-        while loop.time() < deadline:
-            for name, box in targets:
-                result = await self.compare_region(name, box, fast=True)
-                if result.passed:
-                    return name
-            await asyncio.sleep(interval)
-        return None
-
     async def _dismiss_demo_reminder(self) -> bool:
         """Закрыть напоминание демо-режима, если оно всплыло поверх окон.
 
@@ -228,53 +204,36 @@ class TestWindowsLicenseActivation(BaseVMTest):
         await self.glide(*LICENSE_ITEM)
         await asyncio.sleep(0.8)
 
-    async def _reach_tc85_state(self) -> None:
-        """Довести ВМ до конечного состояния TC-85: главное окно открыто.
+    async def _require_start_state(self) -> None:
+        """Сверить экран со стартовым состоянием теста. Не совпало — падение.
 
-        Обычно тест идёт следом за TC-85 в том же прогоне, и приложение уже
-        открыто — тогда проверка панели инструментов сразу проходит и метод
-        ничего не делает. Отдельный запуск теста этот шаг выполняет сам.
+        Стартовое состояние — конечное состояние TC-85: Altami Studio открыт в
+        демо-режиме, на экране главное окно с панелью инструментов.
+
+        Тест ничего не нажимает до этой проверки и не пытается состояние
+        подготовить: несовпадение — это сообщение, а не повод что-то открыть.
         """
         await self._park_mouse()
         toolbar = await self.compare_region("altami_app_toolbar", APP_TOOLBAR_BOX)
         if toolbar.passed:
-            logger.info("Altami Studio уже открыт — стартовое состояние TC-85")
+            logger.info("Стартовое состояние подтверждено: Altami Studio открыт")
             return
 
-        logger.info("Altami Studio не открыт — запускаю с ярлыка")
-        await self.glide(*ALTAMI_SHORTCUT)
-        await asyncio.sleep(0.4)
-        await self.double_click(*ALTAMI_SHORTCUT)
-        # В демо-режиме поверх заставки всплывает окно «Демо версия» с «Закрыть»,
-        # но появляется оно не всегда: в прогоне 23.07.2026 приложение открылось
-        # сразу окном восстановления. Поэтому ждём то из двух окон, что придёт
-        # первым, а не демо-окно в одиночку — иначе тест выстаивает весь лимит
-        # уже после того, как экран готов (в том прогоне 29с впустую).
-        first = await self._wait_first(
-            [("altami_demo_dialog", DEMO_DIALOG_BOX),
-             ("altami_restore_title", RESTORE_TITLE_BOX)],
-            timeout=COLD_LAUNCH_TIMEOUT,
+        message = [
+            "ВМ не в стартовом состоянии — тест не запускался.",
+            "  Нужно: Altami Studio открыт в демо-режиме, на экране главное окно "
+            "(конечное состояние TC-85).",
+            f"  Сейчас: панель инструментов не совпала с эталоном, "
+            f"SSIM={toolbar.score:.6f} (нужно > {toolbar.threshold}).",
+            f"    текущий: {toolbar.current_path}",
+            f"    эталон:  {toolbar.baseline_path}",
+        ]
+        if toolbar.diff_path:
+            message.append(f"    различия: {toolbar.diff_path}")
+        message.append(
+            "  Подготовьте состояние вручную (или прогоном TC-85) и запустите снова."
         )
-        if first == "altami_demo_dialog":
-            logger.info("Всплыло окно демо-режима — закрываю")
-            await self.glide_click(*DEMO_CLOSE_BTN)
-        elif first is None:
-            logger.warning(
-                "За %.0fс после запуска не появилось ни окно демо-режима, ни "
-                "окно восстановления — проверка ниже покажет состояние экрана",
-                COLD_LAUNCH_TIMEOUT,
-            )
-        restore = await self._wait_region(
-            "altami_restore_title", RESTORE_TITLE_BOX, want=True,
-            timeout=RESTORE_TIMEOUT,
-        )
-        assert restore and restore.passed, (
-            "Окно «Восстановить состояние приложения» не появилось при запуске"
-        )
-        await self.glide_click(*RESTORE_SKIP_BTN)
-        await asyncio.sleep(1.0)
-        await self._park_mouse()
-        await self.assert_region("altami_app_toolbar", APP_TOOLBAR_BOX)
+        pytest.fail("\n".join(message))
 
     async def _choose_license_file(self) -> None:
         """В диалоге выбора файла дойти до Astra.alic на рабочем столе.
@@ -307,7 +266,7 @@ class TestWindowsLicenseActivation(BaseVMTest):
     async def test_license_activation_from_file(self):
         """Полный сценарий: активация файлом -> перезапуск -> данные лицензии."""
         # 0. Стартовое состояние TC-85: главное окно Altami Studio открыто.
-        await self._reach_tc85_state()
+        await self._require_start_state()
 
         # 1. Помощь -> Лицензия -> Активировать.
         logger.info("Открываю Помощь -> Лицензия -> Активировать")
