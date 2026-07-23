@@ -16,11 +16,13 @@ Example:
 
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import pytest
 
+from config.settings import SCREENSHOT_DIR
 from src.screenshot_compare import ComparisonResult
 from src.vm_manager import VMSession
 
@@ -115,14 +117,34 @@ class BaseVMTest:
     # статичной области — вырезают её из кадра и сверяют только ей.
 
     async def capture_region(
-        self, name: str, box: Tuple[int, int, int, int]
+        self, name: str, box: Tuple[int, int, int, int], fast: bool = False
     ) -> Path:
         """Capture the screen and crop it to `box` = (left, top, right, bottom).
 
         Returns the path to the cropped PNG (a sibling of the full capture).
         Coordinates are guest pixels from the top-left corner.
+
+        `fast=True` не сохраняет кадр целиком: QEMU пишет сырой PPM, из него
+        сразу вырезается область, PPM удаляется. Замер на живой ВМ 23.07.2026
+        (1920x1200): screendump в PPM — 13 мс, кроп — 8 мс, тогда как обычный
+        путь тратит ~1 с на кодирование полного кадра в PNG и чтение его
+        обратно. Нужен там, где окно живёт секунду-полторы и медленный цикл
+        успевает заглянуть в него от силы один раз. Платой идёт диагностика:
+        полного кадра на диске не остаётся, только вырезанная область.
         """
         from PIL import Image
+
+        if fast:
+            directory = Path(SCREENSHOT_DIR) / self.session.vm_id
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            raw = await self.qmp.screendump(directory / f"{name}_{stamp}.ppm")
+            crop_path = raw.with_name(f"{raw.stem}_region.png")
+            try:
+                with Image.open(raw) as img:
+                    img.crop(box).save(crop_path)
+            finally:
+                raw.unlink(missing_ok=True)
+            return crop_path
 
         full = await self.capture(name)
         crop_path = full.with_name(f"{full.stem}_region.png")
@@ -135,6 +157,7 @@ class BaseVMTest:
         name: str,
         box: Tuple[int, int, int, int],
         threshold: Optional[float] = None,
+        fast: bool = False,
     ) -> ComparisonResult:
         """Crop the screen to `box` and compare it against the baseline (no fail).
 
@@ -144,13 +167,22 @@ class BaseVMTest:
         `threshold` переопределяет порог SSIM для этого сравнения. Пригодно для
         «мягких» проверок наличия (значок есть, но может быть выделен/в фокусе),
         где попиксельная строгость 0.99 не нужна.
+
+        `fast` — быстрая съёмка, см. :meth:`capture_region`. Заодно отключает
+        запись diff-картинок: быстрым путём опрашивают в цикле, и промах на
+        каждой итерации — норма, а не повод оставить файл в screenshots/diff.
         """
-        crop = await self.capture_region(name, box)
+        crop = await self.capture_region(name, box, fast=fast)
         comparator = self.screenshot.comparator
-        if threshold is not None and threshold != comparator.threshold:
+        save_diff = comparator.save_diff and not fast
+        if ((threshold is not None and threshold != comparator.threshold)
+                or save_diff != comparator.save_diff):
             from src.screenshot_compare import ScreenshotComparator
 
-            comparator = ScreenshotComparator(threshold=threshold)
+            comparator = ScreenshotComparator(
+                threshold=comparator.threshold if threshold is None else threshold,
+                save_diff=save_diff,
+            )
         return comparator.compare(crop, name, self.session.vm_id)
 
     async def assert_region(

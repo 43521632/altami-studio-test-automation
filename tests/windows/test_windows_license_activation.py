@@ -100,19 +100,33 @@ LICENSE_REGNUM_BOX = (971, 492, 1170, 514)       # поле «Регистрац
 # --- Таймауты опроса (секунды) -----------------------------------------------
 # Это ПРЕДЕЛ ожидания, а не фиксированная пауза: обычно окно появляется гораздо
 # раньше, и тест сразу идёт дальше. Замеры живого прогона 22.07.2026.
-LAUNCH_TIMEOUT = 12.0      # баннер после двойного клика (min ~1.0с c лицензией)
+LAUNCH_TIMEOUT = 20.0      # баннер после двойного клика (min ~1.0с c лицензией)
 DIALOG_TIMEOUT = 8.0       # окно мастера / диалог выбора файла (min ~1.5с)
 FILE_LOAD_TIMEOUT = 10.0   # возврат в мастер после «Открыть» (min ~2с)
 ACTIVATION_TIMEOUT = 15.0  # экран «Процесс успешно завершен» после «Далее»
 TOAST_TIMEOUT = 10.0       # уведомление об активации после «Завершить»
-RESTORE_TIMEOUT = 12.0     # окно восстановления после старта
+RESTORE_TIMEOUT = 30.0     # окно восстановления после старта
+# Первый запуск после отката снапшота — холодный: диск гостя ещё не прогрет,
+# и заставка висит заметно дольше обычного. Замеры 23.07.2026: в одном прогоне
+# приложение простояло на заставке больше 24с (кадр за кадром SSIM не менялся
+# вообще) и тест упал на прежнем 12-секундном лимите; в другом от двойного
+# клика до окна восстановления прошло 18с. Тест всегда запускают именно после
+# отката, поэтому холодному старту нужен отдельный, щедрый лимит. Ждать его
+# целиком не придётся: `_wait_first` выходит по первому появившемуся окну.
+COLD_LAUNCH_TIMEOUT = 45.0
 DISMISS_TIMEOUT = 6.0      # исчезновение окна после «Пропустить» / крестика
 CLOSE_TIMEOUT = 15.0       # закрытие приложения по крестику
 POLL_INTERVAL = 0.4        # как часто опрашивать экран
 # Баннер лицензированной версии живёт всего ~1.0-1.5с (в демо-режиме дольше:
-# там показ растягивает диалог «Демо версия»). Опрашиваем чаще, иначе кадр с
-# заставкой можно проскочить целиком.
-BANNER_POLL_INTERVAL = 0.2
+# там показ растягивает диалог «Демо версия»), поэтому его ждут быстрым путём
+# (_wait_region(fast=True)). Обычный цикл опроса стоит ~1.4с — не из-за паузы
+# между итерациями, а из-за съёмки: кадр 1920x1200 кодируется в PNG и читается
+# обратно. То есть на полуторасекундную заставку приходится один шанс, и в
+# прогоне 23.07.2026 он сработал впритык: промах в 10:42:01.2, попадание в
+# 10:42:02.6, соседних кадров с заставкой нет. Быстрый путь снимает сырой PPM
+# (13 мс) и режет из него область — итерация укладывается в ~0.15с вместе с
+# паузой ниже, то есть заставку успевает увидеть около десяти кадров подряд.
+BANNER_POLL_INTERVAL = 0.1
 
 
 @pytest.mark.windows
@@ -133,23 +147,58 @@ class TestWindowsLicenseActivation(BaseVMTest):
         await asyncio.sleep(0.2)
 
     async def _wait_region(self, name, box, want=True, timeout=10.0,
-                           interval=POLL_INTERVAL):
+                           interval=POLL_INTERVAL, fast=False):
         """Опрашивать область, пока она (не) совпадёт с эталоном.
 
         want=True  — ждём появления (SSIM > порога);
         want=False — ждём исчезновения (SSIM <= порога).
         Возвращает последний ComparisonResult (по нему видно, дождались ли).
+
+        fast=True — быстрая съёмка (см. base_tests.capture_region): итерация
+        стоит ~0.05с вместо ~1.4с. Курсор при этом паркуется один раз до
+        цикла, а не на каждой итерации: внутри цикла мышь никто не двигает,
+        а парковка стоит дороже самой съёмки. Так опрашивают окна, которые
+        живут секунду-полторы. Промахи быстрого цикла diff не пишут, поэтому
+        по таймауту область досматривается ещё раз обычным путём — ради
+        diff-картинки последнего состояния экрана.
         """
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
         result = None
-        while loop.time() < deadline:
+        if fast:
             await self._park_mouse()
-            result = await self.compare_region(name, box)
+        while loop.time() < deadline:
+            if not fast:
+                await self._park_mouse()
+            result = await self.compare_region(name, box, fast=fast)
             if result.passed == want:
                 return result
             await asyncio.sleep(interval)
+        if fast:
+            result = await self.compare_region(name, box)
         return result
+
+    async def _wait_first(self, targets, timeout=10.0, interval=POLL_INTERVAL):
+        """Ждать ту из нескольких областей, которая совпадёт с эталоном первой.
+
+        targets — последовательность (имя, область). Возвращает имя совпавшей
+        области либо None по таймауту.
+
+        Нужно там, где окно необязательное: ждать его в одиночку значит
+        простоять весь лимит уже после того, как экран пришёл в нужное
+        состояние. Опрос идёт быстрым путём (~0.05с на область), поэтому
+        несколько областей за итерацию стоят дешевле, чем раньше стоила одна.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        await self._park_mouse()
+        while loop.time() < deadline:
+            for name, box in targets:
+                result = await self.compare_region(name, box, fast=True)
+                if result.passed:
+                    return name
+            await asyncio.sleep(interval)
+        return None
 
     async def _dismiss_demo_reminder(self) -> bool:
         """Закрыть напоминание демо-режима, если оно всплыло поверх окон.
@@ -196,12 +245,25 @@ class TestWindowsLicenseActivation(BaseVMTest):
         await self.glide(*ALTAMI_SHORTCUT)
         await asyncio.sleep(0.4)
         await self.double_click(*ALTAMI_SHORTCUT)
-        # В демо-режиме поверх заставки всплывает окно «Демо версия» с «Закрыть»
-        dialog = await self._wait_region(
-            "altami_demo_dialog", DEMO_DIALOG_BOX, want=True, timeout=LAUNCH_TIMEOUT
+        # В демо-режиме поверх заставки всплывает окно «Демо версия» с «Закрыть»,
+        # но появляется оно не всегда: в прогоне 23.07.2026 приложение открылось
+        # сразу окном восстановления. Поэтому ждём то из двух окон, что придёт
+        # первым, а не демо-окно в одиночку — иначе тест выстаивает весь лимит
+        # уже после того, как экран готов (в том прогоне 29с впустую).
+        first = await self._wait_first(
+            [("altami_demo_dialog", DEMO_DIALOG_BOX),
+             ("altami_restore_title", RESTORE_TITLE_BOX)],
+            timeout=COLD_LAUNCH_TIMEOUT,
         )
-        if dialog and dialog.passed:
+        if first == "altami_demo_dialog":
+            logger.info("Всплыло окно демо-режима — закрываю")
             await self.glide_click(*DEMO_CLOSE_BTN)
+        elif first is None:
+            logger.warning(
+                "За %.0fс после запуска не появилось ни окно демо-режима, ни "
+                "окно восстановления — проверка ниже покажет состояние экрана",
+                COLD_LAUNCH_TIMEOUT,
+            )
         restore = await self._wait_region(
             "altami_restore_title", RESTORE_TITLE_BOX, want=True,
             timeout=RESTORE_TIMEOUT,
@@ -327,7 +389,7 @@ class TestWindowsLicenseActivation(BaseVMTest):
         await self.double_click(*ALTAMI_SHORTCUT)
         banner = await self._wait_region(
             "altami_licensed_banner", LICENSED_BANNER_BOX, want=True,
-            timeout=LAUNCH_TIMEOUT, interval=BANNER_POLL_INTERVAL,
+            timeout=LAUNCH_TIMEOUT, interval=BANNER_POLL_INTERVAL, fast=True,
         )
         assert banner and banner.passed, (
             "Баннер-заставка не совпал с эталоном лицензированной версии — "
