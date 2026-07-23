@@ -29,6 +29,7 @@ directly only when driving a VM outside pytest.
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -68,6 +69,15 @@ DEFAULTS: Dict[str, Any] = {
     # SSIM здесь бесполезен: у гритера и рабочего стола Astra общие обои, и
     # неудачный вход даёт тот же SSIM (0.933), что и удачный.
     "min_change_ratio": 0.05,
+    # Как часто опрашивать экран, пока ждём появления экрана входа.
+    "poll_interval": 3.0,
+    # Предел распознавания экрана на ВМ, которая работала ещё до нас. Ждать
+    # там нечего: ОС давно загружена, надо лишь понять, что на экране —
+    # вход или уже рабочий стол.
+    "ready_timeout": 20.0,
+    # Доля сменившихся пикселей, ниже которой кадр считается застывшим. Часы
+    # в трее дают порядка 0.0001, так что 0.005 их не замечает.
+    "still_ratio": 0.005,
 }
 
 
@@ -139,42 +149,133 @@ def _change_ratio(first: Path, second: Path, tolerance: int = 12) -> float:
 
 
 async def _wait_for_login_screen(session, settings: Dict[str, Any], arrival: Path) -> bool:
-    """Wait out the boot, then leave the arrival frame in `arrival`.
+    """Wait for the guest to be ready, leaving the arrival frame in `arrival`.
 
     Returns:
         True if the login sequence should run. False means the screen does not
         match the stored login screen — the guest is already signed in.
-    """
-    logger.info("%s: ждём загрузки ОС, %.0fс", session.vm_id, settings["boot_delay"])
-    await asyncio.sleep(settings["boot_delay"])
-    await session.qmp.screendump(arrival)
 
+    Подготовка идёт по состоянию экрана, а не по таймеру, и путей три.
+    Разделены они потому, что ждать в них нужно совсем разного, а прежняя
+    общая схема — «поспать boot_delay, потом опрашивать до конца
+    greeter_timeout» — в худшем случае тратила 214с (замер 23.07.2026) на
+    вывод «мы и так уже вошли».
+    """
     baseline = login_screen_baseline(session.vm_id)
+
     if not baseline.exists():
-        # Первый прогон: сверяться не с чем. Эталон появится после того, как
-        # вход подтверждённо удастся — тогда следующие прогоны будут точными.
+        # Первый прогон: эталона нет, узнать экран входа нечем. Единственная
+        # защита от набора пароля вслепую посреди загрузки — выждать
+        # boot_delay целиком, как раньше. Эталон появится после того, как
+        # вход подтверждённо удастся, и дальше пойдут быстрые пути.
+        logger.info("%s: ждём загрузки ОС, %.0fс", session.vm_id, settings["boot_delay"])
+        await asyncio.sleep(settings["boot_delay"])
+        await session.qmp.screendump(arrival)
         logger.info(
             "%s: эталона экрана входа нет (%s) — считаем, что на экране вход",
             session.vm_id, baseline,
         )
         return True
 
-    # Экран входа мог ещё не появиться: загрузка бывает медленнее boot_delay.
+    if getattr(session, "booted_by_us", True):
+        return await _wait_for_greeter(session, settings, arrival, baseline)
+    return await _recognize_running_guest(session, settings, arrival, baseline)
+
+
+async def _wait_for_greeter(session, settings: Dict[str, Any], arrival: Path,
+                            baseline: Path) -> bool:
+    """Дождаться экрана входа на ВМ, которую мы сами и включили.
+
+    Раньше здесь стоял безусловный `sleep(boot_delay)`, и опрос начинался уже
+    после него. Но boot_delay — это оценка, за сколько грузится ОС, а не
+    момент появления гритера: в прогоне 23.07.2026 сон на 90с заканчивался
+    тем, что экран входа узнавался ПЕРВЫМ же кадром, то есть висел на экране
+    заметно раньше. Ждём опросом и идём дальше, как только узнали.
+
+    Предел оставлен прежним, boot_delay + greeter_timeout: прогоны, которые
+    укладывались раньше, укладываются и теперь.
+
+    Совпадение требуется двух кадров подряд. Опрос с самого старта иначе мог
+    бы поймать наполовину отрисованный гритер, а он ещё теряет символы (см.
+    docstring модуля про type_delay).
+    """
+    limit = settings["boot_delay"] + settings["greeter_timeout"]
+    logger.info("%s: ждём экран входа, до %.0fс", session.vm_id, limit)
+
     loop = asyncio.get_event_loop()
-    deadline = loop.time() + settings["greeter_timeout"]
+    deadline = loop.time() + limit
+    matched_once = False
+    score = 0.0
     while True:
+        await session.qmp.screendump(arrival)
         score = _similarity(arrival, baseline)
         if score > settings["match_threshold"]:
-            logger.info("%s: узнан экран входа (SSIM=%.6f)", session.vm_id, score)
-            return True
+            if matched_once:
+                logger.info("%s: узнан экран входа (SSIM=%.6f)", session.vm_id, score)
+                return True
+            matched_once = True
+        else:
+            matched_once = False
         if loop.time() >= deadline:
             logger.info(
                 "%s: экран не похож на экран входа (SSIM=%.6f) — "
                 "вход уже выполнен, пропускаем", session.vm_id, score,
             )
             return False
-        await asyncio.sleep(3.0)
-        await session.qmp.screendump(arrival)
+        await asyncio.sleep(settings["poll_interval"])
+
+
+async def _recognize_running_guest(session, settings: Dict[str, Any], arrival: Path,
+                                   baseline: Path) -> bool:
+    """Понять, что на экране ВМ, которая работала ещё до нас: вход или стол.
+
+    Ждать здесь нечего: ОС поднялась задолго до нас. Экран входа узнаём по
+    эталону, а вывод «мы уже вошли» делаем по ЗАСТЫВШЕМУ кадру, а не по
+    выгоранию таймаута — прежняя схема тратила на этот же вывод 214с
+    (90с сна плюс 124с опроса, замер 23.07.2026), причём ровно в том случае,
+    который при разработке теста повторяется чаще всего.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + settings["ready_timeout"]
+    score = 0.0
+    with probe_path(".png") as previous:
+        has_previous = False
+        while True:
+            await session.qmp.screendump(arrival)
+            score = _similarity(arrival, baseline)
+            if score > settings["match_threshold"]:
+                logger.info(
+                    "%s: ВМ работала до нас, на экране вход (SSIM=%.6f)",
+                    session.vm_id, score,
+                )
+                return True
+
+            if has_previous:
+                moved = _change_ratio(previous, arrival)
+                if moved < settings["still_ratio"]:
+                    logger.info(
+                        "%s: ВМ работала до нас, кадр застыл и не похож на экран "
+                        "входа (SSIM=%.6f, сменилось %.3f%% пикселей) — вход уже "
+                        "выполнен, пропускаем",
+                        session.vm_id, score, moved * 100,
+                    )
+                    return False
+
+            if loop.time() >= deadline:
+                # Экран живёт своей жизнью и на вход не похож. У давно
+                # работающей машины так не бывает — скорее всего, ВМ подняли
+                # вручную только что и она ещё грузится. Быстрый вывод тут
+                # неуместен: уходим ждать гритер по-честному.
+                logger.info(
+                    "%s: за %.0fс экран не совпал с эталоном входа и не застыл "
+                    "(SSIM=%.6f) — похоже, ВМ ещё грузится, ждём экран входа",
+                    session.vm_id, settings["ready_timeout"], score,
+                )
+                return await _wait_for_greeter(session, settings, arrival, baseline)
+
+            shutil.copyfile(arrival, previous)
+            has_previous = True
+            await asyncio.sleep(settings["poll_interval"])
 
 
 def _resolve_text(value: str, settings: Dict[str, Any]) -> str:

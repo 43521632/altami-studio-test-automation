@@ -58,12 +58,18 @@ class VMSession:
         config: Dict[str, Any],
         libvirt: LibvirtManager,
         qmp: QMPSession,
+        booted_by_us: bool = True,
     ) -> None:
         self.vm_id = vm_id
         self.vm_name = vm_name
         self.config = config
         self.libvirt = libvirt
         self.qmp = qmp
+        #: ВМ включили мы (True) или она работала ещё до нас (False).
+        #: От этого зависит подготовка сессии: у машины, которая уже работала,
+        #: ОС давно загружена, и выжидать загрузку нечего (см. src/guest_login).
+        #: По умолчанию True — осторожный вариант, полная подготовка.
+        self.booted_by_us = booted_by_us
 
     def __repr__(self) -> str:
         return f"<VMSession {self.vm_id} ({self.vm_name})>"
@@ -350,9 +356,13 @@ class VMManager:
         except VMNotFoundError as e:
             raise VMManagerError(str(e)) from e
 
+        # Запоминаем состояние ДО того, как сами что-то включим: подготовка
+        # сессии у работающей машины и у только что стартовавшей разная.
+        already_running = self.libvirt.is_running(vm_name)
+
         if start_if_stopped:
             await self._ensure_running(vm_name, config)
-        elif not self.libvirt.is_running(vm_name):
+        elif not already_running:
             raise VMManagerError(f"ВМ '{vm_name}' не запущена (start_if_stopped=False)")
 
         await self._wait_for_socket(socket_path)
@@ -363,9 +373,17 @@ class VMManager:
         qmp = QMPSession(vm_id, socket_path, resolution=resolution)
         await qmp.connect()
 
-        session = VMSession(vm_id, vm_name, config, self.libvirt, qmp)
+        session = VMSession(
+            vm_id, vm_name, config, self.libvirt, qmp,
+            booted_by_us=not already_running,
+        )
         try:
-            if wait_for_boot:
+            # Ждать «пока экран перестанет меняться» имеет смысл только у
+            # машины, которую мы сами и включили. Та, что работала до нас,
+            # давно загружена, а её экран всё равно осматривает вход
+            # (src/guest_login): он же и отличает рабочий стол от гритера.
+            # Замер 23.07.2026: лишние 15с на каждом прогоне при 7с работы.
+            if wait_for_boot and not already_running:
                 await session.wait_until_screen_stable(
                     timeout=float(config.get("boot_timeout", 180))
                 )
