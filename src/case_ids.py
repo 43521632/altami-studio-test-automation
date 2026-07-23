@@ -29,7 +29,7 @@ TEST_CASE_MAP = {
     "tests/windows/test_windows_system.py::TestWindowsUI::test_resolution_matches_config": "",
     "tests/windows/test_windows_system.py::TestWindowsUI::test_input_injection_works": "",
     "tests/windows/test_windows_altami_studio.py::TestWindowsAltamiStudio::test_altami_studio_demo_launch": "TC-85",
-    "tests/windows/test_windows_license_activation.py::TestWindowsLicenseActivation::test_license_activation_from_file": "",
+    "tests/windows/test_windows_license_activation.py::TestWindowsLicenseActivation::test_license_activation_from_file": "TC-86",
     # --- Astra Linux ---------------------------------------------------------
     "tests/Astra/test_astra_system.py::TestAstraSystem::test_astra_status": "",
     "tests/Astra/test_astra_system.py::TestAstraSystem::test_astra_cpu_info": "",
