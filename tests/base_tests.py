@@ -117,7 +117,8 @@ class BaseVMTest:
     # статичной области — вырезают её из кадра и сверяют только ей.
 
     async def capture_region(
-        self, name: str, box: Tuple[int, int, int, int], fast: bool = False
+        self, name: str, box: Tuple[int, int, int, int], fast: bool = False,
+        margin: int = 0,
     ) -> Path:
         """Capture the screen and crop it to `box` = (left, top, right, bottom).
 
@@ -131,8 +132,16 @@ class BaseVMTest:
         обратно. Нужен там, где окно живёт секунду-полторы и медленный цикл
         успевает заглянуть в него от силы один раз. Платой идёт диагностика:
         полного кадра на диске не остаётся, только вырезанная область.
+
+        `margin` расширяет вырезаемую область на N пикселей с каждой стороны —
+        запас, по которому потом ищут эталон со сдвигом, см.
+        :meth:`~src.screenshot_compare.ScreenshotComparator.compare_shifted`.
         """
         from PIL import Image
+
+        if margin:
+            left, top, right, bottom = box
+            box = (left - margin, top - margin, right + margin, bottom + margin)
 
         if fast:
             directory = Path(SCREENSHOT_DIR) / self.session.vm_id
@@ -158,6 +167,7 @@ class BaseVMTest:
         box: Tuple[int, int, int, int],
         threshold: Optional[float] = None,
         fast: bool = False,
+        shift: int = 0,
     ) -> ComparisonResult:
         """Crop the screen to `box` and compare it against the baseline (no fail).
 
@@ -171,8 +181,13 @@ class BaseVMTest:
         `fast` — быстрая съёмка, см. :meth:`capture_region`. Заодно отключает
         запись diff-картинок: быстрым путём опрашивают в цикле, и промах на
         каждой итерации — норма, а не повод оставить файл в screenshots/diff.
+
+        `shift` — допуск на смещение окна: область снимается с запасом, и
+        эталон ищется по ней со сдвигом до N пикселей в каждую сторону. Нужен
+        окнам, которые встают по-разному от запуска к запуску, см.
+        :meth:`~src.screenshot_compare.ScreenshotComparator.compare_shifted`.
         """
-        crop = await self.capture_region(name, box, fast=fast)
+        crop = await self.capture_region(name, box, fast=fast, margin=shift)
         comparator = self.screenshot.comparator
         save_diff = comparator.save_diff and not fast
         if ((threshold is not None and threshold != comparator.threshold)
@@ -183,16 +198,29 @@ class BaseVMTest:
                 threshold=comparator.threshold if threshold is None else threshold,
                 save_diff=save_diff,
             )
-        return comparator.compare(crop, name, self.session.vm_id)
+        if not shift:
+            return comparator.compare(crop, name, self.session.vm_id)
+
+        baseline = comparator.baseline_path_for(name, self.session.vm_id)
+        if not baseline.exists():
+            # Эталона ещё нет: сдвигать нечего, и создавать эталон из кадра с
+            # запасом нельзя — он был бы больше нужной области. Снимаем ровно
+            # по границам и отдаём обычному пути с его правилом бутстрапа.
+            crop = await self.capture_region(name, box, fast=fast)
+            return comparator.compare(crop, name, self.session.vm_id)
+        return comparator.compare_shifted(
+            crop, baseline, shift, label=f"{self.session.vm_id}_{name}"
+        )
 
     async def assert_region(
         self,
         name: str,
         box: Tuple[int, int, int, int],
         threshold: Optional[float] = None,
+        shift: int = 0,
     ) -> ComparisonResult:
         """Crop the screen to `box`, compare against baseline, fail on mismatch."""
-        result = await self.compare_region(name, box, threshold)
+        result = await self.compare_region(name, box, threshold, shift=shift)
         if not result.passed:
             message = [
                 f"Область '{name}' не совпала с эталоном: SSIM={result.score:.6f} "

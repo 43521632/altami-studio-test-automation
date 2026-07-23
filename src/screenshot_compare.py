@@ -152,6 +152,109 @@ class ScreenshotComparator:
 
         return self.compare_images(current_path, baseline, label=f"{vm_id}_{test_name}")
 
+    def compare_shifted(
+        self, current_path: Path, baseline_path: Path, shift: int,
+        label: str = "diff",
+    ) -> ComparisonResult:
+        """Best SSIM over ±`shift` pixel offsets. `current` must be that wider.
+
+        Для окон, которые встают с точностью до пикселя по-разному от запуска к
+        запуску. Замер на Astra 23.07.2026: диалог «Выберите лицензионный файл»
+        в одном прогоне оказался смещён на (-1, -1) относительно эталона —
+        полоса текста высотой 20px дала SSIM 0.69 вместо 1.0, хотя на экране
+        было ровно то же самое окно. Сдвиг на пиксель не должен менять ответ на
+        вопрос «это окно на экране?».
+
+        `current_path` — кадр, вырезанный с запасом `shift` пикселей с каждой
+        стороны (см. base_tests.capture_region(margin=...)); эталон скользит по
+        нему, и возвращается лучшее совпадение. Проверка от этого не слабеет:
+        сравнивается всё та же область целиком, просто ищется её точное место.
+        """
+        np, Image, _ = _load_deps()
+
+        current_path, baseline_path = Path(current_path), Path(baseline_path)
+        for p in (current_path, baseline_path):
+            if not p.exists():
+                raise ScreenshotCompareError(f"Файл не найден: {p}")
+
+        with Image.open(current_path) as ci, Image.open(baseline_path) as bi:
+            wide = ci.convert("RGB")
+            width, height = bi.size
+
+        expected = (width + 2 * shift, height + 2 * shift)
+        if wide.size != expected:
+            # Кадр сняли без запаса — сдвигать нечего, идём обычным путём.
+            logger.debug(
+                "compare_shifted: ожидался кадр %s, получен %s — сравниваем как есть",
+                expected, wide.size,
+            )
+            return self.compare_images(current_path, baseline_path, label=label)
+
+        best: Optional[ComparisonResult] = None
+        best_offset = (0, 0)
+        for dy in range(-shift, shift + 1):
+            for dx in range(-shift, shift + 1):
+                box = (shift + dx, shift + dy, shift + dx + width, shift + dy + height)
+                # Diff по промежуточным сдвигам не нужен — их десятки.
+                result = self._compare_arrays(
+                    np.asarray(wide.crop(box)), baseline_path, label, save_diff=False
+                )
+                if best is None or result.score > best.score:
+                    best, best_offset = result, (dx, dy)
+                if best.passed:
+                    break
+            if best and best.passed:
+                break
+
+        assert best is not None  # диапазон сдвигов не бывает пустым
+        best.current_path = current_path
+        best.details = {**best.details, "shift": list(best_offset)}
+        if best_offset != (0, 0):
+            logger.debug("%s: совпало со сдвигом %s", label, best_offset)
+        if not best.passed and self.save_diff:
+            # Diff считаем один раз, по лучшему сдвигу — он и объясняет провал.
+            box = (
+                shift + best_offset[0], shift + best_offset[1],
+                shift + best_offset[0] + width, shift + best_offset[1] + height,
+            )
+            best = self._compare_arrays(
+                np.asarray(wide.crop(box)), baseline_path, label, save_diff=True
+            )
+            best.current_path = current_path
+        logger.info("Сравнение '%s': %s", label, best)
+        return best
+
+    def _compare_arrays(self, cur_arr, baseline_path: Path, label: str,
+                        save_diff: bool) -> ComparisonResult:
+        """SSIM между уже загруженным массивом и эталоном с диска."""
+        np, Image, structural_similarity = _load_deps()
+
+        with Image.open(baseline_path) as bi:
+            base_arr = np.asarray(bi.convert("RGB"))
+
+        score, diff_map = structural_similarity(
+            base_arr, cur_arr, channel_axis=-1, full=True, data_range=255
+        )
+        score = float(score)
+        result = ComparisonResult(
+            passed=score > self.threshold,
+            score=score,
+            threshold=self.threshold,
+            current_path=baseline_path,  # перезапишет вызывающий
+            baseline_path=baseline_path,
+            reason="" if score > self.threshold
+            else f"SSIM {score:.6f} <= порога {self.threshold}",
+            details={"size": list(base_arr.shape[1::-1])},
+        )
+        if not result.passed and save_diff:
+            try:
+                result.diff_path = self._write_diff(
+                    base_arr, cur_arr, diff_map, label, np, Image
+                )
+            except Exception as e:
+                logger.error("Не удалось сохранить diff-изображение: %s", e)
+        return result
+
     def compare_images(
         self, current_path: Path, baseline_path: Path, label: str = "diff"
     ) -> ComparisonResult:
