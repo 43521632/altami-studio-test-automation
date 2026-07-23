@@ -40,7 +40,7 @@ TEST_CASE_MAP = {
     "tests/Astra/test_astra_system.py::TestAstraUI::test_resolution_matches_config": "",
     "tests/Astra/test_astra_system.py::TestAstraUI::test_input_injection_works": "",
     "tests/Astra/test_astra_altami_studio.py::TestAstraAltamiStudio::test_altami_studio_demo_launch": "TC-84",
-    "tests/Astra/test_astra_license_activation.py::TestAstraLicenseActivation::test_license_activation_from_file": "",
+    "tests/Astra/test_astra_license_activation.py::TestAstraLicenseActivation::test_license_activation_from_file": "TC-87",
     # --- macOS ---------------------------------------------------------------
     "tests/macos/test_macos_system.py::TestMacosSystem::test_macos_status": "",
     "tests/macos/test_macos_system.py::TestMacosSystem::test_macos_cpu_info": "",
