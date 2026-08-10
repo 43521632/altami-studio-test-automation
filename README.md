@@ -247,12 +247,17 @@ python scripts/check_vms.py --vm windows
 ---
 
 ## Интерактивное меню
+Запускай прямо из проекта в терминале, чтобы запуск работал через venv. Иначе улетит команда в системный интерпритатор
 
 ```bash
-python3 run_tests.py --menu
+python run_tests.py --menu
 # или
-python3 -m src.vm_menu
+python -m src.vm_menu
 ```
+Или если через терминал то cd -проект
+source venv/bin/activate
+python run_tests.py --menu
+По завершении - deactivate в консоли, или просто закрой консоль.
 
 Возможности:
 
