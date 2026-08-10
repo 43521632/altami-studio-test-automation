@@ -249,9 +249,9 @@ python scripts/check_vms.py --vm windows
 ## Интерактивное меню
 
 ```bash
-python run_tests.py --menu
+python3 run_tests.py --menu
 # или
-python -m src.vm_menu
+python3 -m src.vm_menu
 ```
 
 Возможности:
