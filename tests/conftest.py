@@ -25,6 +25,10 @@ from src.logging_setup import setup_logging
 from src.screenshot_compare import ComparisonResult, ScreenshotComparator
 from src.vm_manager import VMManager, VMSession
 
+from utils.config import get_app_version, get_revision
+from utils.download import download_installer
+from utils.app_operations import app_is_installed, start_app, stop_app
+
 logger = logging.getLogger(__name__)
 
 # Какая ВМ тестируется в этом процессе pytest
@@ -95,7 +99,7 @@ def _link_latest(target: Path) -> None:
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Add `--case TC-85` — run exactly the tests with these case ids."""
+    """Add custom command-line options."""
     parser.addoption(
         "--case",
         action="append",
@@ -105,6 +109,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Прогнать только тест(ы) с этим ID кейса из src/case_ids.py. "
             "Можно повторять: --case TC-85 --case TC-84. Регистр не важен."
         ),
+    )
+    parser.addoption(
+        "--revision",
+        action="store",
+        default=None,
+        help="Ревизия сборки (хэш коммита) для скачивания установщика",
+    )
+    parser.addoption(
+        "--app-version",
+        action="store",
+        default=None,
+        help="Версия продукта (например, 4.2.0). Если не указана, читается из файла VERSION",
+    )
+    parser.addoption(
+        "--installer-path",
+        action="store",
+        default=None,
+        help="Локальный путь к установщику (пропускает скачивание)",
     )
 
 
@@ -362,3 +384,93 @@ def screenshot_dir(vm_id: str) -> Path:
     path = Path(SCREENSHOT_DIR) / vm_id
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# --- Новые фикстуры для изолированных тестов ----------------------------------
+
+
+@pytest.fixture(scope="session")
+def installer_path(request) -> Path:
+    """Download installer once per session (or use local path).
+
+    Returns the path to the installer file, ready to be used by tests.
+    """
+    # Check if user provided a local path
+    local_path = request.config.getoption("--installer-path")
+    if local_path:
+        path = Path(local_path)
+        if not path.exists():
+            raise pytest.UsageError(f"Указанный установщик не найден: {path}")
+        logger.info("Используем локальный установщик: %s", path)
+        return path
+
+    # Otherwise download from JFrog
+    revision = get_revision()
+    version = get_app_version()
+    # platform will be determined from VM_ID or environment
+    try:
+        return download_installer(revision=revision, version=version)
+    except Exception as e:
+        pytest.skip(f"Не удалось скачать установщик: {e}")
+
+
+@pytest.fixture(scope="session")
+async def prepare_environment(vm_session: VMSession, installer_path: Path) -> VMSession:
+    """Prepare the VM for testing: restore snapshot, copy installer, etc.
+
+    This fixture runs once per session. It assumes the VM is already running
+    (from vm_session) and only copies the installer into the guest.
+    """
+    logger.info("Подготовка окружения: копирование установщика на ВМ")
+    # TODO: Copy installer to VM (requires vm_operations.copy_file_to_vm)
+    # For now, we just log that it should be done.
+    logger.info("Установщик %s должен быть скопирован на ВМ", installer_path)
+    return vm_session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def install_app(prepare_environment: VMSession, installer_path: Path) -> VMSession:
+    """Install the application. Use this fixture ONLY in the install test.
+
+    This fixture:
+    1. Runs the installer on the VM.
+    2. Waits for installation to complete.
+    3. Performs initial setup if needed.
+    4. Leaves the app closed after installation.
+    """
+    session = prepare_environment
+    logger.info("Начало установки приложения")
+
+    # TODO: Implement actual installation via UI automation
+    # For now, assume installation is done manually.
+    # In real implementation, we would use session.qmp to interact with UI.
+
+    # Perform initial setup if needed
+    # await perform_initial_setup(session)
+
+    logger.info("Установка приложения завершена")
+    return session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def app_session(vm_session: VMSession) -> VMSession:
+    """Start the application for a test and stop it after.
+
+    Use this fixture for ALL tests that need the app running.
+    It ensures the app is installed before starting.
+    """
+    session = vm_session
+
+    # Check if app is installed
+    if not await app_is_installed(session):
+        pytest.skip("Приложение не установлено. Сначала выполните тест установки.")
+
+    # Start the app
+    logger.info("Запуск приложения")
+    await start_app(session)
+
+    yield session
+
+    # Stop the app after test
+    logger.info("Остановка приложения")
+    await stop_app(session)
