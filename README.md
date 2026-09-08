@@ -567,25 +567,48 @@ python run_tests.py --restart   # продолжить с недоделанны
 
 ---
 
-## План интеграции с Kiwi TCMS
+## Интеграция с Kiwi TCMS (реализована)
 
-Сейчас `KiwiReporter` — **заглушка**. Все результаты сохраняются локально в
-`reports/kiwi_export.json` и `.csv` в формате, совместимом с моделью
-`TestExecution` в Kiwi.
+Интеграция с Kiwi TCMS полностью реализована через официальную библиотеку `tcms-api`.
+Клиент находится в `utils/kiwi_client.py`, а плагин для pytest — в `utils/pytest_kiwi_plugin.py`.
 
-Когда появится доступ, нужно реализовать один метод —
-`KiwiReporter._send_to_kiwi()`. Остальной код менять не придётся.
+**Основные возможности:**
+- Получение ревизии сборки из тест-рана (приоритет: BUILD_REVISION → --revision → Kiwi).
+- Обновление статуса каждого тестового кейса в Kiwi (PASSED/FAILED/BLOCKED/ERROR).
+- Автоматическая загрузка аттачментов (скриншоты, логи, diff-картинки).
+- Закрытие тест-рана по окончании всех тестов.
 
-Порядок работ (Kiwi использует **JSON-RPC**, а не REST):
+**Используемый XML-RPC endpoint:** `https://<KIWI_URL>/xml-rpc/`
 
-1. `pip install tcms-api`
-2. Заполнить секцию `kiwi` в `vms_config.yaml`, ключ — через `KIWI_API_KEY`
-3. Один раз за прогон создать `TestRun`
-4. На каждый результат обновить `TestExecution` нужным статусом
-5. Прикрепить логи и скриншоты через `add_comment` / `add_attachment`
+**Карта статусов Kiwi:**
+| Статус в коде | ID в Kiwi | Название в Kiwi |
+|---------------|-----------|-----------------|
+| `PASS`        | 4         | PASSED          |
+| `FAIL`        | 5         | FAILED          |
+| `ERROR`       | 7         | ERROR           |
+| `SKIP`        | 6         | BLOCKED         |
 
-Подробный псевдокод — в docstring метода `_send_to_kiwi` в
-`src/kiwi_reporter.py`. Включение: `--kiwi`; `--local` перекрывает его.
+**Настройка:**
+Задайте переменные окружения (или в `.env`):
+```bash
+KIWI_URL=https://kiwitcms.altami.ru
+KIWI_USER=ваш_логин
+KIWI_PASSWORD=ваш_пароль
+KIWI_TESTRUN_ID=номер_рана   # опционально
+KIWI_REPORTING_ENABLED=true  # по умолчанию true
+KIWI_SKIP_IF_UNAVAILABLE=true # по умолчанию true
+```
+
+**Запуск с отправкой в Kiwi:**
+```bash
+export KIWI_TESTRUN_ID=12345
+export VM_ID=windows
+pytest tests/
+```
+
+Если Kiwi недоступен или отправка отключена, результаты сохраняются локально в `kiwi_results_*.json`.
+
+Старая заглушка (`src/kiwi_reporter.py`) больше не используется — вся логика перенесена в `utils/kiwi_client.py`.
 
 ---
 

@@ -1,5 +1,6 @@
 """Configuration helpers: revision, version, platform."""
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -7,9 +8,39 @@ from typing import Optional
 
 import pytest
 
+from .kiwi_client import get_revision_from_kiwi
+
+logger = logging.getLogger(__name__)
+
+
+def _get_revision_from_kiwi_if_available() -> Optional[str]:
+    """Try to get revision from Kiwi TCMS using KIWI_TESTRUN_ID."""
+    testrun_id = os.environ.get("KIWI_TESTRUN_ID")
+    if not testrun_id:
+        return None
+    try:
+        testrun_id_int = int(testrun_id)
+        logger.info("Попытка получить ревизию из Kiwi TCMS для тест-рана %d", testrun_id_int)
+        revision = get_revision_from_kiwi(testrun_id_int)
+        if revision:
+            logger.info("Ревизия из Kiwi TCMS: %s", revision)
+            return revision
+        else:
+            logger.warning("Не удалось извлечь ревизию из тест-рана %d", testrun_id_int)
+    except ValueError:
+        logger.warning("KIWI_TESTRUN_ID должен быть числом, получено: %s", testrun_id)
+    except Exception as e:
+        logger.error("Ошибка при получении ревизии из Kiwi: %s", e)
+    return None
+
 
 def get_revision() -> str:
-    """Get build revision from environment, pytest arg, or raise."""
+    """Get build revision from various sources in priority order:
+    1. Environment variable BUILD_REVISION
+    2. Pytest argument --revision
+    3. Kiwi TCMS (if KIWI_TESTRUN_ID is set)
+    4. Raise error if none found.
+    """
     # 1. Environment variable
     rev = os.environ.get("BUILD_REVISION")
     if rev:
@@ -21,8 +52,13 @@ def get_revision() -> str:
         if rev:
             return rev
 
+    # 3. Kiwi TCMS (if KIWI_TESTRUN_ID is set)
+    rev = _get_revision_from_kiwi_if_available()
+    if rev:
+        return rev
+
     raise RuntimeError(
-        "Не задана ревизия сборки. Укажите BUILD_REVISION в окружении или --revision в командной строке."
+        "Не задана ревизия сборки. Укажите BUILD_REVISION, --revision или настройте KIWI_TESTRUN_ID и KIWI_URL/KIWI_USER/KIWI_PASSWORD."
     )
 
 
