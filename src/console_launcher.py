@@ -59,8 +59,18 @@ def find_terminal() -> Optional[tuple]:
     return None
 
 
-def session_command(vm_id: str, vm_name_override: Optional[str] = None) -> str:
-    """Shell command that runs the test session for one VM."""
+def session_command(
+    vm_id: str,
+    vm_name_override: Optional[str] = None,
+    case_id: Optional[str] = None,
+    kiwi_env: Optional[dict] = None,
+) -> str:
+    """Shell command that runs the test session for one VM.
+
+    Настройки Kiwi передаются ФЛАГАМИ, а не через env: окно открывается
+    отдельным процессом, и значения должны быть видны в `ps` — иначе потом
+    не понять, куда именно ушёл прогон.
+    """
     parts = [
         sys.executable,
         str(BASE_DIR / "run_tests.py"),
@@ -68,6 +78,15 @@ def session_command(vm_id: str, vm_name_override: Optional[str] = None) -> str:
     ]
     if vm_name_override:
         parts += ["--vm-name", vm_name_override]
+    if case_id:
+        parts += ["--case", case_id]
+    if kiwi_env:
+        if kiwi_env.get("KIWI_URL"):
+            parts += ["--kiwi-url", kiwi_env["KIWI_URL"]]
+        if kiwi_env.get("KIWI_TESTRUN_ID"):
+            parts += ["--kiwi-testrun", str(kiwi_env["KIWI_TESTRUN_ID"])]
+        if kiwi_env.get("KIWI_REPORTING_ENABLED", "true").lower() != "true":
+            parts += ["--no-kiwi"]
     return f"cd {shlex.quote(str(BASE_DIR))} && exec " + " ".join(
         shlex.quote(p) for p in parts
     )
@@ -77,6 +96,8 @@ def launch_console(
     vm_id: str,
     vm_name_override: Optional[str] = None,
     force_inline: bool = False,
+    case_id: Optional[str] = None,
+    kiwi_env: Optional[dict] = None,
 ) -> str:
     """Open a console running the test session for `vm_id`.
 
@@ -100,7 +121,17 @@ def launch_console(
             + ". Одна ВМ — одна консоль: закройте её или дождитесь завершения."
         )
 
-    command = session_command(vm_id, vm_name_override)
+    # Диалог Kiwi проводится ЗДЕСЬ, до открытия окна: значения должны приехать
+    # в новое окно флагами и быть видны в `ps`, а не потеряться вместе с
+    # ответами, набранными в уже закрытом родительском процессе.
+    if kiwi_env is None:
+        from src.kiwi_console import ask_kiwi, kiwi_env_from_environment
+
+        kiwi_env = ask_kiwi(
+            kiwi_env_from_environment(), case_id=case_id, vm_id=vm_id
+        )
+
+    command = session_command(vm_id, vm_name_override, case_id, kiwi_env)
     terminal = None if force_inline else find_terminal()
 
     if terminal is None:
@@ -108,7 +139,9 @@ def launch_console(
         logger.info("Терминал не найден, сеанс '%s' идёт в текущем окне", vm_id)
         from src.session_console import run_console_session
 
-        run_console_session(vm_id, vm_name_override)
+        run_console_session(
+            vm_id, vm_name_override, case_id=case_id, kiwi_env=kiwi_env
+        )
         return f"сеанс '{vm_id}' завершён в текущем окне"
 
     name, builder = terminal

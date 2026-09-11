@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from config.settings import BASE_DIR, TEST_TIMEOUT
 from src.vm_manager import VMManager
@@ -54,11 +54,19 @@ def pytest_args(vm_id: str, case_id: str, test_path: str) -> list:
 
 
 def run_single_case(
-    vm_id: str, case_id: str, vm_name_override: Optional[str] = None
+    vm_id: str,
+    case_id: str,
+    vm_name_override: Optional[str] = None,
+    kiwi_env: Optional[Dict[str, str]] = None,
 ) -> int:
     """Run the test with `case_id` on `vm_id`. Returns pytest's exit code.
 
     ВМ считается готовой: состояние не проверяется и не подготавливается.
+
+    `kiwi_env` — уже отвеченный диалог Kiwi. Если он не передан, диалог не
+    проводится: режим разработки гоняет ОДИН тест, и отправка его результата
+    в общий ран регрессии чаще всего не нужна — по умолчанию остаётся то, что
+    настроено в .env.
     """
     config = VMManager().config_for(vm_id)
     test_path = config.get("test_path") or f"./tests/{vm_id}"
@@ -68,6 +76,8 @@ def run_single_case(
     env["VM_ID"] = vm_id
     if vm_name_override:
         env["VM_NAME_OVERRIDE"] = vm_name_override
+    if kiwi_env:
+        env.update(kiwi_env)
     env["PYTHONPATH"] = str(BASE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
 
     args = pytest_args(vm_id, case_id, test_path)

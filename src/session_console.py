@@ -23,6 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from config.settings import BASE_DIR, REPORT_DIR, TEST_TIMEOUT
+from src.kiwi_console import ask_kiwi, describe_kiwi, kiwi_env_from_environment
 from src.vm_lock import VMLock, VMLockBusy
 from src.vm_manager import VMManager, VMManagerError
 
@@ -30,9 +31,14 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-def _pytest_args(vm_id: str, test_path: str, junit: Path) -> list:
+def _pytest_args(
+    vm_id: str,
+    test_path: str,
+    junit: Path,
+    case_id: Optional[str] = None,
+) -> list:
     """Command line for one interactive pytest run."""
-    return [
+    args = [
         sys.executable, "-m", "pytest",
         test_path,
         # -s обязателен: без него меню при падении не прочитает ответ из stdin
@@ -47,9 +53,18 @@ def _pytest_args(vm_id: str, test_path: str, junit: Path) -> list:
         f"--timeout={TEST_TIMEOUT}",
         "--tb=no",
     ]
+    # Режим разработки: сеанс гоняет ровно один кейс, а не всю цепочку ВМ
+    if case_id:
+        args.append(f"--case={case_id}")
+    return args
 
 
-def _run_pytest(vm_id: str, junit: Path, vm_name_override: Optional[str]) -> int:
+def _run_pytest(
+    vm_id: str,
+    junit: Path,
+    vm_name_override: Optional[str],
+    kiwi_env: Optional[Dict[str, str]] = None,
+) -> int:
     """Run the suite for one VM in this terminal. Returns pytest's exit code."""
     config = VMManager().config_for(vm_id)
     test_path = config.get("test_path") or f"./tests/{vm_id}"
@@ -58,6 +73,10 @@ def _run_pytest(vm_id: str, junit: Path, vm_name_override: Optional[str]) -> int
     env["VM_ID"] = vm_id
     if vm_name_override:
         env["VM_NAME_OVERRIDE"] = vm_name_override
+    # Настройки Kiwi из диалога перекрывают .env: плагин отчётов читает их из
+    # окружения дочернего pytest, а не из аргументов командной строки.
+    if kiwi_env:
+        env.update(kiwi_env)
     env["PYTHONPATH"] = str(BASE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
 
     args = _pytest_args(vm_id, test_path, junit)
@@ -88,8 +107,13 @@ def _summary(junit: Path) -> Dict[str, int]:
     return totals
 
 
-def _print_summary(vm_id: str, totals: Dict[str, int], junit: Path) -> None:
-    """Print the end-of-run table."""
+def _print_summary(
+    vm_id: str,
+    totals: Dict[str, int],
+    junit: Path,
+    kiwi_env: Optional[Dict[str, str]] = None,
+) -> None:
+    """Print the end-of-run table with the destination of the results."""
     table = Table(title=f"Итоги прогона: {vm_id}", header_style="bold cyan")
     table.add_column("Всего", justify="right")
     table.add_column("PASSED", justify="right", style="green")
@@ -100,6 +124,9 @@ def _print_summary(vm_id: str, totals: Dict[str, int], junit: Path) -> None:
         str(totals["failed"]), str(totals["skipped"]),
     )
     console.print(table)
+    # Ответ на вопрос «а оно вообще отправилось?» должен быть в таблице итогов,
+    # а не только в шапке: шапка к этому моменту давно уехала вверх.
+    console.print(f"[dim]Kiwi: {describe_kiwi(kiwi_env)}[/dim]")
     console.print(f"[dim]Отчёт: {junit}[/dim]")
 
 
@@ -150,8 +177,19 @@ def _print_preflight(vm_id: str, vm_name_override: Optional[str]) -> None:
         console.print(f"[yellow]Внимание:[/yellow] {warning}")
 
 
-def run_console_session(vm_id: str, vm_name_override: Optional[str] = None) -> int:
-    """Run the interactive test session for one VM. Returns a process exit code."""
+def run_console_session(
+    vm_id: str,
+    vm_name_override: Optional[str] = None,
+    case_id: Optional[str] = None,
+    kiwi_env: Optional[Dict[str, str]] = None,
+) -> int:
+    """Run the interactive test session for one VM. Returns a process exit code.
+
+    `case_id` (из `--case`) сужает прогон до одного кейса — так сеанс запускают
+    в режиме разработки. `kiwi_env` — уже отвеченный диалог Kiwi; если он не
+    передан, а `--session` запущен лаунчером с флагами, вызывающий код сам
+    собирает его через :func:`kiwi_env_from_args` и передаёт сюда.
+    """
     try:
         VMManager().config_for(vm_id)
     except VMManagerError as e:
@@ -174,13 +212,30 @@ def run_console_session(vm_id: str, vm_name_override: Optional[str] = None) -> i
     report_dir.mkdir(parents=True, exist_ok=True)
     last_totals: Dict[str, int] = {}
 
+    # Куда отправлять результаты, спрашиваем ОДИН раз за сеанс, до первого
+    # прогона: перезапуск набора не должен требовать повторного ответа, а
+    # запускать pytest с неясным адресом отправки — верный способ узнать об
+    # этом только в конце.
+    if kiwi_env is None:
+        kiwi_env = ask_kiwi(
+            kiwi_env_from_environment(), case_id=case_id, vm_id=vm_id
+        )
+        if kiwi_env is None:
+            console.print("[yellow]Настройка Kiwi не завершена — сеанс отменён[/yellow]")
+            lock.release()
+            _hold_window()
+            return 2
+
     try:
         run = 0
         while True:
             run += 1
+            case_note = f"Кейс: [bold magenta]{case_id}[/bold magenta]\n" if case_id else ""
             console.print(
                 Panel(
                     f"ВМ: [bold]{vm_id}[/bold]\n"
+                    f"Kiwi: [bold]{describe_kiwi(kiwi_env)}[/bold]\n"
+                    f"{case_note}"
                     f"Прогон №{run}, старт {datetime.now():%H:%M:%S}\n"
                     "Тесты идут последовательно. При падении — пауза и выбор "
                     "действия.",
@@ -191,11 +246,11 @@ def run_console_session(vm_id: str, vm_name_override: Optional[str] = None) -> i
             _print_preflight(vm_id, vm_name_override)
 
             junit = report_dir / f"junit_console_run{run}.xml"
-            _run_pytest(vm_id, junit, vm_name_override)
+            _run_pytest(vm_id, junit, vm_name_override, case_id, kiwi_env)
 
             console.print("\n[bold green]All done[/bold green]")
             last_totals = _summary(junit)
-            _print_summary(vm_id, last_totals, junit)
+            _print_summary(vm_id, last_totals, junit, kiwi_env)
 
             if _final_menu() == "finish":
                 break

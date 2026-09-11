@@ -270,6 +270,25 @@ def build_parser() -> argparse.ArgumentParser:
              "(так лаунчер запускает сеанс внутри открытого окна)",
     )
     parser.add_argument(
+        "--case", action="append", default=[], metavar="TC-85",
+        help="Гнать только тест(ы) с этим ID кейса. Можно повторять. "
+             "Работает и с --console/--session (режим разработки), и с обычным "
+             "прогоном.",
+    )
+    parser.add_argument(
+        "--no-kiwi", action="store_true",
+        help="Локальный прогон: результаты не отправляются в Kiwi TCMS",
+    )
+    parser.add_argument(
+        "--kiwi-url", metavar="URL",
+        help="Базовый адрес сервера Kiwi (https://kiwitcms.altami.ru). "
+             "Можно передать и полную ссылку на ран — номер из неё выдёргивается",
+    )
+    parser.add_argument(
+        "--kiwi-testrun", metavar="ID",
+        help="Номер тест-рана Kiwi TCMS, в который писать результаты",
+    )
+    parser.add_argument(
         "--log-level", default=None,
         help="Уровень логирования: DEBUG | INFO | WARNING | ERROR",
     )
@@ -282,15 +301,35 @@ def main() -> int:
     setup_logging(level=args.log_level)
 
     if args.session:
+        from src.kiwi_console import kiwi_env_from_args
         from src.session_console import run_console_session
 
-        return run_console_session(args.session, args.vm_name)
+        # Один кейс — и режим сеанса сводится к режиму разработки: та же ВМ,
+        # тот же замок, но прогон сужен до выбранного теста.
+        case_id = args.case[0] if args.case else None
+        if len(args.case) > 1:
+            console.print(
+                "[yellow]В сеансе --case применяется только первый: "
+                f"{case_id}[/yellow]"
+            )
+        return run_console_session(
+            args.session, args.vm_name, case_id=case_id,
+            kiwi_env=kiwi_env_from_args(args),
+        )
 
     if args.console:
         from src.console_launcher import ConsoleLauncherError, launch_console
+        from src.kiwi_console import kiwi_env_from_args
 
         try:
-            console.print(f"[green]OK[/green] {launch_console(args.console, args.vm_name)}")
+            # Флаги Kiwi приезжают в окно флагами же — иначе значения не будут
+            # видны в `ps` и по прогону нельзя будет понять, куда он отправил
+            # результаты.
+            console.print(f"[green]OK[/green] {launch_console(
+                args.console, args.vm_name,
+                case_id=args.case[0] if args.case else None,
+                kiwi_env=kiwi_env_from_args(args),
+            )}")
         except ConsoleLauncherError as e:
             console.print(f"[bold red]Ошибка:[/bold red] {e}")
             return 2

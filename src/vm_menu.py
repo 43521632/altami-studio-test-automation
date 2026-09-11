@@ -287,15 +287,30 @@ class VMMenu:
 
         Одна ВМ — одна консоль. Разные ВМ можно гонять параллельно, каждую в
         своём окне.
+
+        Перед открытием окон ОДИН раз спрашивается тест-ран Kiwi — один ответ
+        на всю пачку выбранных ВМ. Пустой ввод = локальный прогон.
         """
         from src.console_launcher import ConsoleLauncherError, launch_console
+        from src.kiwi_console import ask_kiwi_link, describe_kiwi
 
         vm_ids = self._show_test_targets()
         if not vm_ids:
             return
-        for vm_id in self.select_vms(vm_ids):
+        selected = self.select_vms(vm_ids)
+        if not selected:
+            return
+
+        # Спрашиваем один раз на все выбранные ВМ: ран один, а окон может быть
+        # несколько — повторять вопрос для каждой ВМ было бы издевательством.
+        kiwi_env = ask_kiwi_link(vm_id=", ".join(selected))
+        console.print(f"Куда пишем: [bold]{describe_kiwi(kiwi_env)}[/bold]\n")
+
+        for vm_id in selected:
             try:
-                console.print(f"[green]OK[/green] {launch_console(vm_id)}")
+                console.print(
+                    f"[green]OK[/green] {launch_console(vm_id, kiwi_env=kiwi_env)}"
+                )
             except ConsoleLauncherError as e:
                 console.print(f"[bold red]ОШИБКА[/bold red] {vm_id}: {e}")
 
@@ -336,6 +351,10 @@ class VMMenu:
 
         Запуск идёт в этой же консоли, а не в отдельном окне: при разработке
         вывод теста нужен здесь и сейчас, рядом с правками.
+
+        Единичный тест — это всегда режим разработчика, и он ВСЕГДА идёт
+        локально: спрашивать про тест-ран Kiwi здесь нечего. Результат одного
+        теста в общем ране регрессии только запутал бы отчёт.
         """
         from src.dev_run import run_single_case
 
@@ -368,16 +387,22 @@ class VMMenu:
                 return
             case_id = match
 
+        # Одиночный тест — всегда локально: отправлять его результат в общий
+        # ран регрессии не нужно, а лишний вопрос только мешает.
+        from src.kiwi_console import no_kiwi_env
+
+        kiwi_env = no_kiwi_env()
         console.print(
             Panel(
-                f"ВМ: [bold]{vm_id}[/bold]\nКейс: [bold magenta]{case_id}[/bold magenta]\n\n"
+                f"ВМ: [bold]{vm_id}[/bold]\nКейс: [bold magenta]{case_id}[/bold magenta]\n"
+                "Kiwi: [bold]локальный прогон, без отправки[/bold]\n\n"
                 "[yellow]Состояние ВМ не проверяется[/yellow] — тест пойдёт "
                 "поверх того, что сейчас на машине.",
                 title="[bold cyan]Режим разработчика[/bold cyan]",
                 border_style="cyan",
             )
         )
-        code = run_single_case(vm_id, case_id)
+        code = run_single_case(vm_id, case_id, kiwi_env=kiwi_env)
         style = "green" if code == 0 else "bold red"
         console.print(f"[{style}]pytest завершился с кодом {code}[/{style}]")
 
