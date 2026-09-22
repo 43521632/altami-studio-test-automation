@@ -59,6 +59,17 @@ vms:
         - {type: "$password"}
         - {key: ret, wait: 25}             # войти и дождаться рабочего стола
 
+    # Скачивание установщика ВНУТРИ гостя (см. tests/test_install.py).
+    # В домене нет QEMU guest agent/SSH, поэтому команду выполнить нельзя —
+    # ссылку открывает браузер гостя, креды JFrog вводятся с клавиатуры.
+    download:
+      # Как открыть URL: run-dialog — Win+R + `cmd /c start <url>`.
+      browser: "run-dialog"
+      # Папка загрузок внутри гостя (относительно домашнего каталога).
+      dir: "Downloads"
+      # Сколько ждать появления файла установщика, сек.
+      timeout: 600
+
     # Базовые настройки для UI-тестов
     ui_settings:
       # Фактический видеорежим гостя, снят через detect_resolution().
@@ -101,6 +112,13 @@ vms:
         - {click: [690, 491], wait: 10}    # кнопка «Войти»
         # Предупреждение «Ваш домашний каталог не даёт записать пробный файл»
         - {click: [918, 411], wait: 10}    # кнопка «Да»
+    # Скачивание установщика ВНУТРИ гостя (см. tests/test_install.py).
+    download:
+      # Astra: Ctrl+Alt+T открывает терминал, затем `xdg-open <url>`.
+      browser: "terminal"
+      dir: "Downloads"
+      timeout: 600
+
     ui_settings:
       # Режим рабочего стола ПОСЛЕ входа — в нём и работают тесты.
       # Гритер fly-dm показывается в 1280x800, поэтому координаты в
@@ -148,8 +166,10 @@ test_settings:
 logging:
   log_dir: "./logs"
   # ВНЕ репозитория намеренно: screendump выполняет процесс QEMU от имени
-  # libvirt-qemu, а тот не может пройти внутрь /home/romand (права 750).
-  # Каталог принадлежит libvirt-qemu:kvm с g+w — QEMU пишет, мы читаем по kvm.
+  # libvirt-qemu, а его AppArmor-профиль (per-VM libvirt-<uuid>) запрещает
+  # запись в /home. Каталог принадлежит libvirt-qemu:kvm — QEMU пишет, мы
+  # читаем по группе kvm. Производные кропы и копии для анализа кладём в
+  # screenshots/ ВНУТРИ репозитория (см. SYSTEM_PROMPT.md, п. 3).
   screenshot_dir: "/var/lib/libvirt/screenshots"
   baseline_dir: "./baseline"     # Эталонные скриншоты
   diff_dir: "./screenshots/diff"

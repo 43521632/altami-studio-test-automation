@@ -102,6 +102,48 @@ class KiwiClient:
         logger.warning("Неизвестный формат поля 'build' в тест-ране %d", testrun_id)
         return None
 
+    def get_installer_url(self, testrun_id: Optional[int] = None) -> Optional[str]:
+        """Extract installer URL from a test run.
+
+        По договорённости с тестовой системой URL установщика кладётся в поле
+        `summary` тест-рана (см. INSTRUCTION_FOR_AI.md, п. 12.4/12.5).
+
+        Args:
+            testrun_id: ID тест-рана; по умолчанию KIWI_TESTRUN_ID из окружения.
+
+        Returns:
+            URL установщика или None, если он не задан.
+        """
+        if testrun_id is None:
+            raw = os.environ.get("KIWI_TESTRUN_ID")
+            if not raw:
+                return None
+            try:
+                testrun_id = int(raw)
+            except ValueError:
+                logger.warning("KIWI_TESTRUN_ID должен быть числом: %s", raw)
+                return None
+
+        try:
+            data = self.get_testrun(testrun_id)
+        except Exception as e:
+            logger.error("Не удалось получить тест-ран %d: %s", testrun_id, e)
+            return None
+
+        summary = (data.get("summary") or "").strip()
+        if not summary:
+            logger.warning("В тест-ране %d поле summary пустое", testrun_id)
+            return None
+
+        if not summary.lower().startswith(("http://", "https://")):
+            logger.warning(
+                "В тест-ране %d summary не похоже на URL установщика: %s",
+                testrun_id, summary[:120],
+            )
+            return None
+
+        return summary
+
     def get_test_executions_for_case(self, testrun_id: int, case_id: str) -> List[dict]:
         """Get test executions for a specific case in a test run."""
         try:
@@ -277,6 +319,16 @@ def get_revision_from_kiwi(testrun_id: int) -> Optional[str]:
         return client.get_build_revision(testrun_id)
     except Exception as e:
         logger.error("Ошибка при получении ревизии из Kiwi: %s", e)
+        return None
+
+
+def get_installer_url_from_kiwi(testrun_id: Optional[int] = None) -> Optional[str]:
+    """Helper to get installer URL from a Kiwi test run."""
+    try:
+        client = KiwiClient()
+        return client.get_installer_url(testrun_id)
+    except Exception as e:
+        logger.error("Ошибка при получении URL установщика из Kiwi: %s", e)
         return None
 
 

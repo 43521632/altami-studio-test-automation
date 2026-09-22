@@ -10,19 +10,15 @@ from src.vm_manager import VMSession
 logger = logging.getLogger(__name__)
 
 
-async def install_app(
-    session: VMSession,
-    installer_path: Path,
-    timeout: float = 300.0,
-) -> bool:
-    """Install application on the VM using UI automation.
+async def install_app(session: VMSession, timeout: float = 300.0) -> bool:
+    """Установить приложение в госте через UI.
 
-    This is a placeholder — actual implementation depends on how
-    the installer works (GUI or silent mode).
+    Заглушка: установщик уже скачан браузером гостя (tests/test_install.py),
+    но сам мастер установки ещё не автоматизирован — его шаги снимаются с
+    живой ВМ.
     """
-    logger.info("Установка приложения из %s", installer_path)
-    # TODO: Implement installation via QMP UI interactions
-    # For now, assume it's already installed or will be installed manually
+    logger.info("Установка приложения (мастер установки ещё не автоматизирован)")
+    # TODO: запустить скачанный установщик из папки загрузок и пройти мастер
     return True
 
 
